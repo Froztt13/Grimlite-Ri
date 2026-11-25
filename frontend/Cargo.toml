@@ -1,0 +1,16 @@
+[package]
+name = "grimlite_frontend"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+grimlite_bot = { path = "../bot" }
+ruffle_core = { path = "../ruffle/core" }
+async-channel = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }

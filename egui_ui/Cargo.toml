@@ -1,0 +1,13 @@
+[package]
+name = "grimlite_egui"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+grimlite_bot = { path = "../bot" }
+egui = { workspace = true }

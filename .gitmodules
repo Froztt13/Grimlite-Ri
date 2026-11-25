@@ -1,0 +1,4 @@
+[submodule "ruffle"]
+	path = ruffle
+	url = https://github.com/muktiarafi/ruffle-aqw.git
+	branch = aqw
