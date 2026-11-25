@@ -2,3 +2,4 @@
 
 pub mod capture;
 pub mod external;
+pub mod ruffle_host;

@@ -2291,6 +2291,13 @@ impl ApplicationHandler<RuffleEvent> for App {
             (Some(main_window), RuffleEvent::ExportBundle) => {
                 main_window.gui.export_bundle();
             }
+            (Some(main_window), RuffleEvent::GrimliteFlashCall(req)) => {
+                let mut player = main_window.player.get();
+                grimlite_frontend::ruffle_host::answer_flash_call(player.as_deref_mut(), req);
+            }
+            (None, RuffleEvent::GrimliteFlashCall(req)) => {
+                grimlite_frontend::ruffle_host::answer_flash_call(None, req);
+            }
 
             (Some(main_window), RuffleEvent::EnterFullScreen) => {
                 if let Some(mut player) = main_window.player.get()

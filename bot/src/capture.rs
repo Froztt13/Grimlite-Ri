@@ -1,5 +1,4 @@
-//! In-process packet capture & interception (replaces Grimlite-Li's legacy TCP Proxy and
-//! `packetFromServer`/`packetFromClient` ExternalInterface workaround).
+//! In-process packet capture, interception, and direct two-way packet injection.
 
 use flate2::Compression;
 use flate2::read::ZlibDecoder;
@@ -13,6 +12,12 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 pub const LOG_CAPACITY: usize = 1000;
 const MAX_INFLATED: u64 = 16 * 1024 * 1024;
+
+/// Direct socket injection sink provided by `grimlite_frontend::capture::CaptureNavigator`.
+pub trait PacketSink: Send + Sync {
+    fn send_to_server(&self, bytes: Vec<u8>) -> Result<(), String>;
+    fn send_to_client(&self, bytes: Vec<u8>) -> Result<(), String>;
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MessageInfo {
@@ -62,6 +67,7 @@ pub struct CaptureProxy {
     running: AtomicBool,
     logging: AtomicBool,
     interceptors: RwLock<Vec<Arc<dyn Interceptor>>>,
+    sink: RwLock<Option<Arc<dyn PacketSink>>>,
     log: Mutex<VecDeque<InterceptedPacket>>,
     logged: AtomicU64,
     version: AtomicU64,
@@ -73,6 +79,7 @@ impl Default for CaptureProxy {
             running: AtomicBool::new(false),
             logging: AtomicBool::new(true),
             interceptors: RwLock::new(Vec::new()),
+            sink: RwLock::new(None),
             log: Mutex::new(VecDeque::new()),
             logged: AtomicU64::new(0),
             version: AtomicU64::new(0),
@@ -101,6 +108,68 @@ impl CaptureProxy {
 
     pub fn set_logging(&self, on: bool) {
         self.logging.store(on, Ordering::Relaxed);
+    }
+
+    pub fn set_sink(&self, sink: Arc<dyn PacketSink>) {
+        *self.sink.write() = Some(sink);
+    }
+
+    pub fn clear_sink(&self) {
+        *self.sink.write() = None;
+    }
+
+    pub fn is_socket_connected(&self) -> bool {
+        self.sink.read().is_some()
+    }
+
+    /// Injects a raw packet directly to the AQW server socket (NUL-terminated automatically).
+    pub fn send_to_server(&self, packet: &str) -> Result<(), String> {
+        let sink = self
+            .sink
+            .read()
+            .clone()
+            .ok_or_else(|| "game socket is not connected".to_string())?;
+        let trimmed = packet.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let mut bytes = trimmed.as_bytes().to_vec();
+        if bytes.last().copied() != Some(0) {
+            bytes.push(0);
+        }
+        sink.send_to_server(bytes)?;
+        if self.is_logging() {
+            self.log_packet(InterceptedPacket {
+                packet: trimmed.to_string(),
+                outbound: Some(true),
+            });
+        }
+        Ok(())
+    }
+
+    /// Injects a simulated server packet directly into the AQW client socket.
+    pub fn send_to_client(&self, packet: &str) -> Result<(), String> {
+        let sink = self
+            .sink
+            .read()
+            .clone()
+            .ok_or_else(|| "game socket is not connected".to_string())?;
+        let trimmed = packet.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let mut bytes = trimmed.as_bytes().to_vec();
+        if bytes.last().copied() != Some(0) {
+            bytes.push(0);
+        }
+        sink.send_to_client(bytes)?;
+        if self.is_logging() {
+            self.log_packet(InterceptedPacket {
+                packet: trimmed.to_string(),
+                outbound: Some(false),
+            });
+        }
+        Ok(())
     }
 
     pub fn add_interceptor(&self, interceptor: Arc<dyn Interceptor>) {
@@ -205,7 +274,6 @@ impl Stream {
     }
 }
 
-/// Decompresses AQW's zlib-compressed server packets (prefixed with 0x78).
 fn unpack(raw: &str) -> Option<String> {
     let bytes = raw.as_bytes();
     if bytes.first().copied() != Some(0x78) {

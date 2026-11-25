@@ -1,8 +1,8 @@
 //! Wraps Ruffle's `NavigatorBackend::connect_socket` to route all AQW game packets through
-//! `grimlite_bot::capture::CaptureProxy` in-process (no local TCP proxy or reconnect needed).
+//! `grimlite_bot::capture::CaptureProxy` in-process and expose direct two-way packet injection.
 
 use async_channel::{Receiver, Sender};
-use grimlite_bot::capture::{CaptureProxy, Stream};
+use grimlite_bot::capture::{CaptureProxy, PacketSink, Stream};
 use ruffle_core::backend::navigator::{
     ErrorResponse, NavigationMethod, NavigatorBackend, OwnedFuture, Request, SuccessResponse,
 };
@@ -12,6 +12,26 @@ use ruffle_core::socket::{SocketAction, SocketHandle};
 use std::sync::Arc;
 use std::time::Duration;
 use url::{ParseError, Url};
+
+struct RuffleSocketSink {
+    handle: SocketHandle,
+    to_server: Sender<Vec<u8>>,
+    to_client: Sender<SocketAction>,
+}
+
+impl PacketSink for RuffleSocketSink {
+    fn send_to_server(&self, bytes: Vec<u8>) -> Result<(), String> {
+        self.to_server
+            .try_send(bytes)
+            .map_err(|e| format!("failed to send packet to server: {e}"))
+    }
+
+    fn send_to_client(&self, bytes: Vec<u8>) -> Result<(), String> {
+        self.to_client
+            .try_send(SocketAction::Data(self.handle, bytes))
+            .map_err(|e| format!("failed to inject packet to client: {e}"))
+    }
+}
 
 pub struct CaptureNavigator<N> {
     inner: N,
@@ -70,6 +90,13 @@ impl<N: NavigatorBackend> NavigatorBackend for CaptureNavigator<N> {
         self.inner
             .connect_socket(host, port, timeout, handle, server_rx, server_tx);
 
+        // Register direct injection sink for Packet Spammer / Tamperer / Bot commands.
+        capture.set_sink(Arc::new(RuffleSocketSink {
+            handle,
+            to_server: to_server.clone(),
+            to_client: sender.clone(),
+        }));
+
         let outbound_capture = capture.clone();
         self.inner.spawn_future(Box::pin(async move {
             let mut stream = Stream::default();
@@ -79,6 +106,7 @@ impl<N: NavigatorBackend> NavigatorBackend for CaptureNavigator<N> {
                     break;
                 }
             }
+            outbound_capture.clear_sink();
             Ok(())
         }));
 
@@ -99,6 +127,7 @@ impl<N: NavigatorBackend> NavigatorBackend for CaptureNavigator<N> {
                     break;
                 }
             }
+            capture.clear_sink();
             Ok(())
         }));
     }

@@ -54,4 +54,7 @@ pub enum RuffleEvent {
 
     /// Export Ruffle Bundle from currently playing content and open save dialog.
     ExportBundle,
+
+    /// Grimlite Ri: marshal a Flash ExternalInterface call onto the main/engine thread.
+    GrimliteFlashCall(grimlite_frontend::ruffle_host::FlashCallRequest),
 }

@@ -2209,6 +2209,7 @@ dependencies = [
  "async-channel",
  "grimlite_bot",
  "ruffle_core",
+ "serde_json",
  "tracing",
  "url",
 ]

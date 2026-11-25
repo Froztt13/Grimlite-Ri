@@ -362,6 +362,18 @@ impl ActivePlayer {
             .with_avm2_dse_enabled(opt.avm2_dse_enabled);
         let player = builder.build();
 
+        // Grimlite Ri: connect Rust -> Flash marshalling onto this engine thread.
+        let dispatch_loop = event_loop.clone();
+        let flash_host = Arc::new(grimlite_frontend::ruffle_host::RuffleFlashHost::new(
+            std::thread::current().id(),
+            move |req| {
+                dispatch_loop
+                    .send_event(RuffleEvent::GrimliteFlashCall(req))
+                    .map_err(|_| "event loop closed".to_string())
+            },
+        ));
+        crate::grimlite::bot().set_host(flash_host);
+
         window.set_title("Grimlite Ri");
 
         SWF_INFO.with(|i| *i.borrow_mut() = Some(readable_name));

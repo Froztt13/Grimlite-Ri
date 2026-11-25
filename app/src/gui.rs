@@ -84,7 +84,14 @@ impl RuffleGui {
 
             event_loop,
             preferences,
-            grimlite_ui: grimlite_egui::GrimliteUi::new(crate::grimlite::bot()),
+            grimlite_ui: grimlite_egui::GrimliteUi::new(
+                crate::grimlite::bot(),
+                Some(Box::new(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Grimoire Bot", &["gbot", "json"])
+                        .pick_file()
+                })),
+            ),
         }
     }
 
