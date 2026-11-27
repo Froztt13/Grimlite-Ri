@@ -73,6 +73,8 @@ pub struct GuiController {
     /// AQW build: whether egui drew anything (menu bar, dialog, context menu, debug UI) in the
     /// last frame. Without any of it, a GUI-only repaint would present the same picture again.
     ui_visible: bool,
+    /// Whether the pointer is currently inside the top chrome (`TabBar` + `NavBar`).
+    pointer_in_top_bar: bool,
     theme_controller: ThemeController,
     #[cfg(feature = "tracy_images")]
     tracy_frame_captures: crate::tracy::FrameCapturesHolder,
@@ -292,7 +294,8 @@ impl GuiController {
             movie_binds: None,
             size,
             no_gui,
-            ui_visible: true,
+            ui_visible: false,
+            pointer_in_top_bar: false,
             theme_controller,
             #[cfg(feature = "tracy_images")]
             tracy_frame_captures,
@@ -407,13 +410,28 @@ impl GuiController {
             return false;
         }
 
+        let was_in_top_bar = self.pointer_in_top_bar;
+        match event {
+            WindowEvent::CursorMoved { position, .. } => {
+                self.pointer_in_top_bar = position.y <= self.height_offset();
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.pointer_in_top_bar = false;
+            }
+            _ => {}
+        }
+        let top_bar_event = self.pointer_in_top_bar || was_in_top_bar;
+
         let response = self.egui_winit.on_window_event(&self.window, event);
-        // AQW build: egui asks for a repaint on every mouse move. When it shows nothing, the
-        // repaint would only present the movie's last frame again (extra presents that frame
-        // counters and frame generation tools such as Lossless Scaling count as frames); the
-        // input still reaches egui with the next movie frame.
-        if response.repaint && self.wants_redraws() {
-            self.window.request_redraw();
+        // AQW build: egui asks for a repaint on every mouse move and key press. When no interactive
+        // overlay/popup is open and the event happened over the Flash game canvas (not the top bar),
+        // skipping immediate GUI-only redraws avoids extra v-sync presents that stall typing/frames;
+        // the input still reaches egui with the next movie frame.
+        if response.repaint && (self.wants_redraws() || top_bar_event || response.consumed) {
+            let is_move = matches!(event, WindowEvent::CursorMoved { .. });
+            if !is_move || self.last_update.elapsed() >= Duration::from_millis(16) {
+                self.window.request_redraw();
+            }
         }
         response.consumed
     }
@@ -563,7 +581,7 @@ impl GuiController {
     pub fn render(
         &mut self,
         _event_loop: &winit::event_loop::ActiveEventLoop,
-        mut player: Option<MutexGuard<Player>>,
+        mut player: Option<grimlite_frontend::gpu::TabPlayerGuard<'_>>,
     ) {
         #[cfg(feature = "tracy_images")]
         if player.is_none() {
@@ -573,7 +591,6 @@ impl GuiController {
 
         let raw_input = self.egui_winit.take_egui_input(&self.window);
         let show_menu = self.window.fullscreen().is_none() && !self.no_gui;
-        let mut counter_shapes = 0;
         let counter_top = self.height_offset();
         let mut full_output = self.egui_winit.egui_ctx().run_ui(raw_input, |ui| {
             self.gui.update(
@@ -588,12 +605,17 @@ impl GuiController {
                 },
             );
             if crate::mugetsu::show_fps() {
-                counter_shapes = fps_counter(ui.ctx(), counter_top);
+                let _ = fps_counter(ui.ctx(), counter_top);
             }
         });
-        // AQW build: the FPS counter (Mugetsu's settings) is redrawn with the movie's frames
-        // only, so on its own it isn't UI that wants repaints (see `wants_redraws`).
-        self.ui_visible = full_output.shapes.len() > counter_shapes;
+        // Static top chrome (`TabBar` + `NavBar`) is always present; only request standalone GUI
+        // repaints between SWF frames when an interactive window, popup, or text input is active.
+        self.ui_visible = !self.no_gui
+            || self.gui.has_interactive_overlay(self.egui_winit.egui_ctx())
+            || player
+                .as_deref_mut()
+                .is_some_and(|p| p.debug_ui().has_open_windows());
+        self.last_update = Instant::now();
         self.repaint_after = full_output
             .viewport_output
             .get(&ViewportId::ROOT)

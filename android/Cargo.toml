@@ -13,8 +13,9 @@ workspace = true
 
 [target.'cfg(target_os = "android")'.dependencies]
 grimlite_bot = { path = "../bot" }
-grimlite_frontend = { path = "../frontend" }
+grimlite_frontend = { path = "../frontend", features = ["wgpu"] }
 grimlite_egui = { path = "../egui_ui" }
+rayon = { workspace = true }
 ruffle_core = { path = "../ruffle/core", features = ["lzma", "jpegxr", "default_compatibility_rules", "default_font"] }
 ruffle_render = { path = "../ruffle/render" }
 ruffle_render_wgpu = { path = "../ruffle/render/wgpu" }
@@ -28,6 +29,7 @@ egui = { workspace = true }
 egui-wgpu = { workspace = true }
 futures = { workspace = true }
 android-activity = { version = "0.6.1", features = ["game-activity"] }
+ndk = "0.9"
 android_logger = "0.15.1"
 async-task = "4.7.1"
 log = "0.4"

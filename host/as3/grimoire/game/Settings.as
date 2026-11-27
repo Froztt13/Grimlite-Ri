@@ -7,10 +7,11 @@ package grimoire.game
 	import flash.events.Event;
 	import flash.events.IOErrorEvent;
 	import flash.utils.ByteArray;
+	import flash.utils.Dictionary;
 	import grimoire.Root;
 
 	/**
-	 * Runtime client toggles (Infinite Range, Provoke, Enemy Magnet, Lag Killer + Custom Wallpaper, Skip Cutscenes, Disable Animations).
+	 * Runtime client toggles (Infinite Range, Provoke, Enemy Magnet, Lag Killer + Custom Wallpaper, Skip Cutscenes, Hide Players, Disable FX/Animations).
 	 */
 	public class Settings
 	{
@@ -18,6 +19,7 @@ package grimoire.game
 		private static var lagBg:Sprite = null;
 		private static var lagLoader:Loader = null;
 		private static var lagHasImage:Boolean = false;
+		private static var savedFX:Dictionary = new Dictionary(true);
 
 		public static function SetInfiniteRange(enabled:Boolean = true):void
 		{
@@ -243,6 +245,47 @@ package grimoire.game
 			catch (e:Error) {}
 		}
 
+		public static function SetHidePlayers(enabled:Boolean):void
+		{
+			try
+			{
+				if (Root.Game == null || Root.Game.world == null)
+				{
+					return;
+				}
+				var myAv:* = Root.Game.world.myAvatar;
+				var avatars:Object = Root.Game.world.avatars;
+				for (var key:String in avatars)
+				{
+					var av:* = avatars[key];
+					if (av != null && av !== myAv && av.pMC != null)
+					{
+						av.pMC.visible = !enabled;
+					}
+				}
+			}
+			catch (e:Error) {}
+		}
+
+		public static function SetDisableAnimations(enabled:Boolean):void
+		{
+			if (!enabled)
+			{
+				try
+				{
+					for (var mc:* in savedFX)
+					{
+						if (mc != null && mc.spFX == null)
+						{
+							mc.spFX = savedFX[mc];
+						}
+					}
+					savedFX = new Dictionary(true);
+				}
+				catch (e:Error) {}
+			}
+		}
+
 		public static function DisableAnimationsFrame():void
 		{
 			try
@@ -251,9 +294,17 @@ package grimoire.game
 				for (var key:String in avatars)
 				{
 					var av:* = avatars[key];
-					if (av != null && av.pMC != null && av.pMC.mcChar != null)
+					if (av != null && av.pMC != null)
 					{
-						av.pMC.mcChar.gotoAndStop("Idle");
+						if (av.pMC.spFX != null)
+						{
+							savedFX[av.pMC] = av.pMC.spFX;
+							av.pMC.spFX = null;
+						}
+						if (av.pMC.mcChar != null)
+						{
+							av.pMC.mcChar.gotoAndStop("Idle");
+						}
 					}
 				}
 			}

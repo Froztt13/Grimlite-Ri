@@ -237,6 +237,24 @@ impl Bot {
                 self.logs.push_debug("AQW Game.swf loaded");
                 None
             }
+            "playerState" => {
+                if let Some(raw) = args.first()
+                    && let Ok(snap) = serde_json::from_str::<PlayerSnapshot>(raw)
+                {
+                    let logged_in = snap.logged_in;
+                    self.state.update_player(snap);
+                    if !logged_in {
+                        self.auto_attack.stop_on_logout(self);
+                        if self.runner.is_running() && !self.runner.config().auto_relogin {
+                            self.logs.push_debug(
+                                "[Bot] Stopped (logged out, auto-relogin disabled)",
+                            );
+                            self.stop_bot();
+                        }
+                    }
+                }
+                None
+            }
             "debug" => {
                 if let Some(msg) = args.first() {
                     self.logs.push_debug(msg.clone());
@@ -260,30 +278,29 @@ impl Bot {
                     if !bot.is_game_loaded() {
                         continue;
                     }
+                    let desired = bot.options.get();
+                    let options_changed = applied.as_ref() != Some(&desired);
+                    let need_provoke = desired.provoke_monsters
+                        && tick.is_multiple_of(2)
+                        && bot.state.snapshot().logged_in;
+                    let need_follow = desired.follow_enabled
+                        && tick.is_multiple_of(4)
+                        && bot.state.snapshot().logged_in;
+
+                    // Fast path: player state and walk speed are maintained inside AS3 `onFrame`
+                    // (`playerState` push-on-change + `optWalkSpeedEnabled`), so when no options
+                    // changed and neither provoke nor follow is active, zero main-thread Flash
+                    // calls or event-loop wakeups occur!
+                    if !options_changed && !need_provoke && !need_follow {
+                        continue;
+                    }
+
                     let Some(flash) = bot.flash() else {
                         continue;
                     };
 
-                    // Poll batched player state
-                    if let Ok(snap) = flash.call_json::<PlayerSnapshot>("getPlayerState", &[]) {
-                        let logged_in = snap.logged_in;
-                        bot.state.update_player(snap);
-                        if !logged_in {
-                            if bot.auto_attack.is_running() {
-                                bot.auto_attack.stop(Arc::clone(&bot));
-                            }
-                            if bot.runner.is_running() && !bot.runner.config().auto_relogin {
-                                bot.logs.push_debug(
-                                    "[Bot] Stopped (logged out, auto-relogin disabled)",
-                                );
-                                bot.stop_bot();
-                            }
-                        }
-                    }
-
                     // Enforce changed options
-                    let desired = bot.options.get();
-                    if applied.as_ref() != Some(&desired) {
+                    if options_changed {
                         let image_changed = applied.as_ref().is_none_or(|a| {
                             a.lag_killer_image != desired.lag_killer_image
                                 || a.lag_killer_image_rev != desired.lag_killer_image_rev
@@ -321,6 +338,10 @@ impl Bot {
                         let _ =
                             flash.call_bool("setLagKiller", &[FlashArg::Bool(desired.lag_killer)]);
                         let _ = flash.call_bool(
+                            "setHidePlayers",
+                            &[FlashArg::Bool(desired.hide_players)],
+                        );
+                        let _ = flash.call_bool(
                             "setDisableAnimations",
                             &[FlashArg::Bool(desired.disable_animations)],
                         );
@@ -328,37 +349,24 @@ impl Bot {
                             "setSkipCutscenes",
                             &[FlashArg::Bool(desired.skip_cutscenes)],
                         );
-                        let effective_speed = if desired.walk_speed_enabled {
-                            desired.walk_speed.clamp(1, 99)
-                        } else {
-                            8
-                        };
-                        let _ = flash.call_bool("setWalkSpeed", &[FlashArg::from(effective_speed)]);
+                        let _ = flash.call_bool(
+                            "setWalkSpeedOpt",
+                            &[
+                                FlashArg::Bool(desired.walk_speed_enabled),
+                                FlashArg::from(desired.walk_speed.clamp(1, 99)),
+                            ],
+                        );
                         let _ = flash.call_bool("setFPS", &[FlashArg::from(desired.fps)]);
                         applied = Some(desired.clone());
                     }
 
-                    // Periodic walk speed enforcement while enabled (matches Grimlite-Li chkWalkSpeed)
-                    if desired.walk_speed_enabled && bot.state.snapshot().logged_in {
-                        let _ = flash.call_bool(
-                            "setWalkSpeed",
-                            &[FlashArg::from(desired.walk_speed.clamp(1, 99))],
-                        );
-                    }
-
                     // Periodic provoke monsters (every ~1s while logged in)
-                    if desired.provoke_monsters
-                        && tick.is_multiple_of(2)
-                        && bot.state.snapshot().logged_in
-                    {
+                    if need_provoke {
                         let _ = flash.call_bool("aggroMonsters", &[]);
                     }
 
                     // Periodic Follow Player check (every ~2s while logged in, mirrors BotManager.cs setFollowHandler)
-                    if desired.follow_enabled
-                        && tick.is_multiple_of(4)
-                        && bot.state.snapshot().logged_in
-                    {
+                    if need_follow {
                         let target = desired.follow_player.trim().to_ascii_lowercase();
                         if !target.is_empty() && target != "player name" {
                             let in_map = flash

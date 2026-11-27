@@ -89,6 +89,13 @@ impl AutoAttack {
             bot.spawn_flash_action("cancelTarget", vec![]);
         }
     }
+
+    pub fn stop_on_logout(&self, bot: &Bot) {
+        if self.running.swap(false, Ordering::AcqRel) {
+            bot.anti_counter.reset();
+            bot.logs.push_debug("[Auto Attack] Stopped (logged out)");
+        }
+    }
 }
 
 fn sleep_step(ms: u64, running: &AtomicBool) {

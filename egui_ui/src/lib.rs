@@ -351,6 +351,7 @@ pub fn show_detached_window_sized(
         .id(egui::Id::new(id))
         .open(open)
         .default_size(default_size)
+        .constrain(true)
         .resizable(true)
         .collapsible(true);
     if let Some(min) = min_size {
@@ -421,6 +422,15 @@ impl GrimliteUi {
     pub fn with_image_dialog(mut self, pick_image: Option<FileDialogFn>) -> Self {
         self.pick_image = pick_image;
         self
+    }
+
+    /// Whether any Grimlite overlay window is currently open on the canvas.
+    pub fn has_open_window(&self) -> bool {
+        self.show_about
+            || self.show_bot_manager
+            || self.show_options
+            || self.show_logs
+            || self.tools.has_open_window()
     }
 
     pub fn show(&mut self, ctx: &Context, egui_ui: &mut Ui) {
@@ -821,6 +831,9 @@ impl GrimliteUi {
                             .changed();
                         changed |= cols[1]
                             .checkbox(&mut self.options.hide_players, "Hide Players")
+                            .changed();
+                        changed |= cols[1]
+                            .checkbox(&mut self.options.disable_animations, "Disable FX / Anims")
                             .changed();
                     });
                 });

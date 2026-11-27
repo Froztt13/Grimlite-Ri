@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_NAME="Grimlite Ri"
 BIN_NAME="grimlite-ri"
 
-PROFILE="debug"
+PROFILE="release"
 DO_BUILD=1
 DO_RUN=0
 

@@ -27,12 +27,14 @@ use ruffle_render_wgpu::backend::WgpuRenderBackend;
 use ruffle_render_wgpu::clap::PowerPreference;
 use ruffle_render_wgpu::descriptors::Descriptors;
 use std::borrow::Cow;
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use grimlite_frontend::gpu::TabPlayerGuard;
 use url::Url;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
@@ -234,7 +236,10 @@ impl ActivePlayer {
                 initial_allow_list,
                 opt.filesystem_access_mode,
             ),
-        );
+        )
+        .with_http_cache(grimlite_frontend::shared_http_cache(
+            &opt.cache_directory.join("gamefiles"),
+        ));
 
         if cfg!(feature = "external_video") && preferences.openh264_enabled() {
             #[cfg(feature = "external_video")]
@@ -464,6 +469,9 @@ struct TabSession {
     tab_id: u64,
     bot: Arc<grimlite_bot::Bot>,
     active: ActivePlayer,
+    segments: Mutex<Vec<wgpu::CommandEncoder>>,
+    saved_volume: Cell<Option<f32>>,
+    bg_accum_ms: Cell<f64>,
 }
 
 /// Owner of one or more Ruffle Players (one per account tab),
@@ -531,12 +539,18 @@ impl PlayerController {
             self.preferences.clone(),
             self.file_picker.clone(),
         );
+        // Any segments cut during `ActivePlayer::new` belong to this new tab.
+        let initial_segments = ruffle_render_wgpu::segments::take_pending();
         self.tabs.push(TabSession {
             tab_id,
             bot: bot.clone(),
             active,
+            segments: Mutex::new(initial_segments),
+            saved_volume: Cell::new(None),
+            bg_accum_ms: Cell::new(0.0),
         });
         self.active_index = self.tabs.len() - 1;
+        self.sync_tab_activity_states();
         (tab_id, bot)
     }
 
@@ -553,6 +567,7 @@ impl PlayerController {
     pub fn switch_tab(&mut self, tab_id: u64) -> bool {
         if let Some(idx) = self.tabs.iter().position(|t| t.tab_id == tab_id) {
             self.active_index = idx;
+            self.sync_tab_activity_states();
             true
         } else {
             false
@@ -574,7 +589,32 @@ impl PlayerController {
         if self.active_index >= self.tabs.len() {
             self.active_index = self.tabs.len() - 1;
         }
+        self.sync_tab_activity_states();
         Some(self.tabs[self.active_index].tab_id)
+    }
+
+    /// Parks mouse off-stage (avoiding expensive display-list `run_mouse_pick` hit-testing on hidden
+    /// tabs) and mutes background tab audio, restoring audio on the active tab.
+    fn sync_tab_activity_states(&self) {
+        for (idx, tab) in self.tabs.iter().enumerate() {
+            let is_active = idx == self.active_index;
+            if let Some(mut p) = TabPlayerGuard::try_lock(&tab.active.player, &tab.segments) {
+                if is_active {
+                    if let Some(vol) = tab.saved_volume.take() {
+                        p.set_volume(vol);
+                    }
+                } else {
+                    if p.mouse_in_stage() {
+                        p.set_mouse_in_stage(false);
+                        p.handle_event(PlayerEvent::MouseLeave);
+                    }
+                    if tab.saved_volume.get().is_none() {
+                        tab.saved_volume.set(Some(p.volume()));
+                        p.set_volume(0.0);
+                    }
+                }
+            }
+        }
     }
 
     pub fn destroy(&mut self) {
@@ -586,35 +626,44 @@ impl PlayerController {
         self.active_index = 0;
     }
 
-    pub fn get(&self) -> Option<MutexGuard<'_, Player>> {
+    pub fn get(&self) -> Option<TabPlayerGuard<'_>> {
         self.tabs.get(self.active_index).map(|tab| {
-            tab.active
-                .player
-                .try_lock()
+            TabPlayerGuard::try_lock(&tab.active.player, &tab.segments)
                 .expect("Player lock must be available")
         })
     }
 
-    pub fn get_by_tab_id(&self, tab_id: u64) -> Option<MutexGuard<'_, Player>> {
+    pub fn get_by_tab_id(&self, tab_id: u64) -> Option<TabPlayerGuard<'_>> {
         self.tabs
             .iter()
             .find(|t| t.tab_id == tab_id)
             .map(|tab| {
-                tab.active
-                    .player
-                    .try_lock()
+                TabPlayerGuard::try_lock(&tab.active.player, &tab.segments)
                     .expect("Player lock must be available")
             })
     }
 
-    /// Advances all non-active account tabs so their SWF, network sockets, bots, and Maid keep running.
+    /// Advances non-active account tabs at a throttled cadence (~12.5 FPS while loading or running
+    /// Bot/AutoAttack/Maid, ~4 FPS when idle) with per-tab `SEGMENTS` isolation and zero GPU rendering.
     pub fn tick_background_tabs(&self, dt: ruffle_core::FloatDuration) {
+        let delta_ms = dt.as_millis();
         for (idx, tab) in self.tabs.iter().enumerate() {
             if idx == self.active_index {
                 continue;
             }
-            if let Ok(mut player) = tab.active.player.try_lock() {
-                player.tick(dt);
+            let busy = !tab.bot.is_game_loaded()
+                || tab.bot.runner.is_running()
+                || tab.bot.auto_attack.is_running()
+                || tab.bot.maid.is_running();
+            let target_ms = if busy { 80.0 } else { 250.0 };
+            let accum = tab.bg_accum_ms.get() + delta_ms;
+            if accum < target_ms {
+                tab.bg_accum_ms.set(accum);
+                continue;
+            }
+            tab.bg_accum_ms.set(0.0);
+            if let Some(mut player) = TabPlayerGuard::try_lock(&tab.active.player, &tab.segments) {
+                player.tick(ruffle_core::FloatDuration::from_millis(accum.min(250.0)));
             }
         }
     }
@@ -630,10 +679,26 @@ impl PlayerController {
     }
 
     pub fn poll(&self, task: PlayerRunnable) {
-        // Route the async future to whichever tab owns its `PlayerId` (active or background).
+        // Route the async future to whichever tab owns its `PlayerId` (active or background),
+        // isolating thread-local `SEGMENTS` around `task.0.run()`.
         let target_id = *task.0.metadata();
-        if self.tabs.iter().any(|t| t.active.id == target_id) {
+        if let Some(tab) = self.tabs.iter().find(|t| t.active.id == target_id) {
+            let outer = ruffle_render_wgpu::segments::take_pending();
+            let saved = std::mem::take(
+                &mut *tab
+                    .segments
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()),
+            );
+            ruffle_render_wgpu::segments::restore(saved);
             task.0.run();
+            let remaining = ruffle_render_wgpu::segments::take_pending();
+            *tab.segments
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = remaining;
+            if !outer.is_empty() {
+                ruffle_render_wgpu::segments::restore(outer);
+            }
         }
     }
 }

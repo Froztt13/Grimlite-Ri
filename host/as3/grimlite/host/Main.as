@@ -48,8 +48,14 @@ public class Main extends MovieClip {
     private var callbacks:Array = [];
 
     private var optDisableAnimations:Boolean = false;
+    private var optHidePlayers:Boolean = false;
     private var optSkipCutscenes:Boolean = false;
     private var optEnemyMagnet:Boolean = false;
+    private var optWalkSpeedEnabled:Boolean = false;
+    private var optWalkSpeed:int = 8;
+    private var stateFrameCounter:int = 0;
+    private var optFrameCounter:int = 0;
+    private var lastPushedState:String = "";
 
     public function Main() {
         super();
@@ -102,10 +108,12 @@ public class Main extends MovieClip {
         expose("setEnemyMagnet", setEnemyMagnet);
         expose("setLagKiller", setLagKiller);
         expose("setLagKillerImage", setLagKillerImage);
+        expose("setHidePlayers", setHidePlayers);
         expose("setDisableAnimations", setDisableAnimations);
         expose("setSkipCutscenes", setSkipCutscenes);
         expose("setFPS", setFPS);
         expose("setWalkSpeed", setWalkSpeed);
+        expose("setWalkSpeedOpt", setWalkSpeedOpt);
 
         // Map
         expose("joinMap", joinMap);
@@ -280,17 +288,40 @@ public class Main extends MovieClip {
     }
 
     private function onFrame(event:Event):void {
+        stateFrameCounter++;
+        if (stateFrameCounter >= 12) {
+            stateFrameCounter = 0;
+            pushPlayerStateIfChanged();
+        }
         if (game == null || game.world == null) {
             return;
         }
-        if (optSkipCutscenes) {
-            Settings.SetSkipCutscenes();
+        if (optWalkSpeedEnabled && int(game.world.WALKSPEED) != optWalkSpeed) {
+            game.world.WALKSPEED = optWalkSpeed;
         }
-        if (optEnemyMagnet) {
-            Settings.SetEnemyMagnet();
+        optFrameCounter++;
+        if (optFrameCounter >= 3) {
+            optFrameCounter = 0;
+            if (optSkipCutscenes) {
+                Settings.SetSkipCutscenes();
+            }
+            if (optEnemyMagnet) {
+                Settings.SetEnemyMagnet();
+            }
+            if (optHidePlayers) {
+                Settings.SetHidePlayers(true);
+            }
+            if (optDisableAnimations) {
+                Settings.DisableAnimationsFrame();
+            }
         }
-        if (optDisableAnimations) {
-            Settings.DisableAnimationsFrame();
+    }
+
+    private function pushPlayerStateIfChanged():void {
+        var json:String = getPlayerState();
+        if (json != lastPushedState) {
+            lastPushedState = json;
+            callHost("playerState", [json]);
         }
     }
 
@@ -418,8 +449,15 @@ public class Main extends MovieClip {
         return "true";
     }
 
+    private function setHidePlayers(on:* = true):String {
+        optHidePlayers = (on == true || on == "true");
+        Settings.SetHidePlayers(optHidePlayers);
+        return "true";
+    }
+
     private function setDisableAnimations(on:* = true):String {
         optDisableAnimations = (on == true || on == "true");
+        Settings.SetDisableAnimations(optDisableAnimations);
         return "true";
     }
 
@@ -428,13 +466,25 @@ public class Main extends MovieClip {
         return "true";
     }
 
-    private function setFPS(fps:* = 30):String {
+    private function setFPS(fps:* = 24):String {
         Root.setFPS(String(fps));
         return "true";
     }
 
     private function setWalkSpeed(speed:* = 8):String {
+        var parsed:int = int(speed);
+        if (parsed > 0) {
+            optWalkSpeed = parsed;
+        }
         Player.SetWalkSpeed(String(speed));
+        return "true";
+    }
+
+    private function setWalkSpeedOpt(enabled:* = false, speed:* = 8):String {
+        optWalkSpeedEnabled = (enabled == true || enabled == "true");
+        var parsed:int = int(speed);
+        optWalkSpeed = parsed > 0 ? parsed : 8;
+        Player.SetWalkSpeed(String(optWalkSpeedEnabled ? optWalkSpeed : 8));
         return "true";
     }
 

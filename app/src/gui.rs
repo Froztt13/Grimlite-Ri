@@ -34,7 +34,7 @@ use rfd::AsyncFileDialog;
 use ruffle_core::debug_ui::Message as DebugMessage;
 use ruffle_core::{Player, PlayerEvent};
 use std::collections::HashMap;
-use std::sync::{Arc, MutexGuard, Weak};
+use std::sync::{Arc, Weak};
 use std::{fs, mem};
 use winit::event_loop::EventLoopProxy;
 
@@ -321,6 +321,21 @@ impl RuffleGui {
         self.context_menu.is_some()
     }
 
+    /// Whether an interactive UI window, dialog, prompt, or dropdown popup is currently open.
+    /// Static top chrome (`TabBar` + `NavBar`) alone does not need unthrottled repaints when
+    /// events occur inside the Flash game area.
+    pub fn has_interactive_overlay(&self, ctx: &egui::Context) -> bool {
+        let active_open = self
+            .tab_uis
+            .get(&self.active_tab_id)
+            .is_some_and(grimlite_egui::GrimliteUi::has_open_window);
+        active_open
+            || !self.prompts.is_empty()
+            || self.context_menu.is_some()
+            || egui::Popup::is_any_open(ctx)
+            || ctx.egui_wants_keyboard_input()
+    }
+
     /// Notifies the GUI that the player has been destroyed.
     fn on_player_destroyed(&mut self) {
         self.dialogs.close_dialogs_with_notifiers();
@@ -331,7 +346,7 @@ impl RuffleGui {
         &mut self,
         opt: LaunchOptions,
         content_descriptor: ContentDescriptor,
-        mut player: MutexGuard<Player>,
+        mut player: grimlite_frontend::gpu::TabPlayerGuard<'_>,
     ) {
         self.menu_bar.currently_opened = Some((content_descriptor.clone(), opt.clone()));
 

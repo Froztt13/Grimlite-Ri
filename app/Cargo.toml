@@ -25,8 +25,9 @@ image = { workspace = true, features = ["png"] }
 egui-winit = { workspace = true }
 fontdb = "0.23"
 grimlite_bot = { path = "../bot" }
-grimlite_frontend = { path = "../frontend" }
+grimlite_frontend = { path = "../frontend", features = ["wgpu"] }
 grimlite_egui = { path = "../egui_ui" }
+rayon = { workspace = true }
 ruffle_core = { path = "../ruffle/core", features = ["audio", "clap", "mp3", "aac", "nellymoser", "default_compatibility_rules", "egui"] }
 ruffle_render = { path = "../ruffle/render", features = ["clap"] }
 ruffle_render_wgpu = { path = "../ruffle/render/wgpu", features = ["clap"] }

@@ -46,6 +46,18 @@ impl ToolsWindows {
         self.maid.set_dialogs(pick_json, save_json);
     }
 
+    /// Whether any tool window is currently open.
+    pub fn has_open_window(&self) -> bool {
+        self.maid.open
+            || self.travels.open
+            || self.loaders.open
+            || self.hotkeys.open
+            || self.cosmetics.open
+            || self.packets.show_logger
+            || self.packets.show_spammer
+            || self.packets.show_tamperer
+    }
+
     /// Renders the `Tools` dropdown menu items in the top navigation bar.
     pub fn menu_items(&mut self, ui: &mut Ui) {
         if ui

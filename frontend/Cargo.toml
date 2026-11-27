@@ -8,9 +8,17 @@ version.workspace = true
 [lints]
 workspace = true
 
+[features]
+default = []
+wgpu = ["dep:ruffle_render_wgpu", "dep:wgpu", "dep:bytemuck"]
+
 [dependencies]
 grimlite_bot = { path = "../bot" }
 ruffle_core = { path = "../ruffle/core" }
+ruffle_http_cache = { path = "../ruffle/http-cache" }
+ruffle_render_wgpu = { path = "../ruffle/render/wgpu", optional = true }
+wgpu = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
 async-channel = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }

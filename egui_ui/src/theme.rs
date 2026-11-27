@@ -105,13 +105,14 @@ pub fn apply(ctx: &Context) {
 
 /// Framed elevated card container with a subtle muted title.
 pub fn card(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&mut Ui)) {
+    let target_inner_w = (ui.available_width() - 18.0).max(60.0);
     egui::Frame::new()
         .fill(Palette::BG_SURFACE)
         .stroke(Stroke::new(1.0, Palette::BORDER_SUBTLE))
         .corner_radius(CornerRadius::same(5))
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
-            ui.set_min_width(ui.available_width());
+            ui.set_width(target_inner_w);
             if !title.is_empty() {
                 ui.label(
                     RichText::new(title)
@@ -179,9 +180,12 @@ pub fn dropdown<R>(
         w.hovered.weak_bg_fill = Palette::BG_BUTTON;
         w.hovered.bg_stroke = Stroke::new(1.0, Palette::BORDER_HOVER);
 
+        // Subtract horizontal button padding + border so total outer ComboBox width never exceeds
+        // `width` (prevents auto-expanding window width feedback loops when `width == available_width()`).
+        let inner_w = (width - ui.spacing().button_padding.x * 2.0 - 2.0).max(24.0);
         ComboBox::from_id_salt(id_salt)
             .selected_text(selected_text)
-            .width(width)
+            .width(inner_w)
             .show_ui(ui, menu_contents)
     })
     .inner

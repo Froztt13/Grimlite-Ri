@@ -212,10 +212,13 @@ impl MaidWindow {
 
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
-                    .show(ui, |ui| match self.tab {
-                        MaidTab::Main => dirty |= self.show_main_tab(ui, &mut cfg),
-                        MaidTab::Combat => dirty |= self.show_combat_tab(ui, &mut cfg),
-                        MaidTab::Maps => dirty |= self.show_maps_tab(ui, &mut cfg),
+                    .show(ui, |ui| {
+                        ui.set_max_width(ui.available_width());
+                        match self.tab {
+                            MaidTab::Main => dirty |= self.show_main_tab(ui, &mut cfg),
+                            MaidTab::Combat => dirty |= self.show_combat_tab(ui, &mut cfg),
+                            MaidTab::Maps => dirty |= self.show_maps_tab(ui, &mut cfg),
+                        }
                     });
 
                 if dirty {
@@ -304,7 +307,7 @@ impl MaidWindow {
         ui.add_space(4.0);
 
         theme::card(ui, "Class Preset & Skills", |ui| {
-            let field_w = (ui.available_width() - 78.0).max(150.0);
+            let field_w = (ui.available_width() - 80.0).max(110.0);
             egui::Grid::new("maid_skills_grid")
                 .num_columns(2)
                 .min_col_width(68.0)
@@ -398,11 +401,11 @@ impl MaidWindow {
                     )
                     .changed();
                 ui.label("Skills");
-                let w = ui.available_width().max(60.0);
                 dirty |= ui
-                    .add_sized(
-                        [w, 20.0],
-                        TextEdit::singleline(&mut cfg.safe_skill_list).hint_text("e.g. 2,3"),
+                    .add(
+                        TextEdit::singleline(&mut cfg.safe_skill_list)
+                            .hint_text("e.g. 2,3")
+                            .desired_width(ui.available_width()),
                     )
                     .changed();
             });
@@ -414,12 +417,11 @@ impl MaidWindow {
             ui.horizontal(|ui| {
                 dirty |= ui.checkbox(&mut cfg.buff_stop_attack, "Enable").changed();
                 ui.label("Skills");
-                let w = ui.available_width().max(80.0);
                 dirty |= ui
-                    .add_sized(
-                        [w, 20.0],
+                    .add(
                         TextEdit::singleline(&mut cfg.buff_stop_attack_list)
-                            .hint_text("e.g. 1,2,3 or 5"),
+                            .hint_text("e.g. 1,2,3 or 5")
+                            .desired_width(ui.available_width()),
                     )
                     .changed();
             });
@@ -430,12 +432,11 @@ impl MaidWindow {
         theme::card(ui, "Attack Priority", |ui| {
             ui.horizontal(|ui| {
                 dirty |= ui.checkbox(&mut cfg.attack_priority, "Enable").changed();
-                let w = ui.available_width().max(100.0);
                 dirty |= ui
-                    .add_sized(
-                        [w, 20.0],
+                    .add(
                         TextEdit::singleline(&mut cfg.attack_priority_monster)
-                            .hint_text("Monster1, id:2, Monster2"),
+                            .hint_text("Monster1, id:2, Monster2")
+                            .desired_width(ui.available_width()),
                     )
                     .changed();
             });
@@ -452,10 +453,10 @@ impl MaidWindow {
                     .changed();
             });
             dirty |= ui
-                .add_sized(
-                    [ui.available_width(), 22.0],
+                .add(
                     TextEdit::singleline(&mut cfg.special_msg)
-                        .hint_text("Anim msg CSV or tc;cycle;monster;sec;order"),
+                        .hint_text("Anim msg CSV or tc;cycle;monster;sec;order")
+                        .desired_width(ui.available_width()),
                 )
                 .changed();
             ui.label(

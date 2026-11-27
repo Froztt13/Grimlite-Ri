@@ -247,7 +247,7 @@ impl BotManagerWindow {
             delay_ms: "1000".into(),
             beep_times: 10,
             misc_level: String::new(),
-            misc_fps: 30,
+            misc_fps: 24,
             goto_player_name: String::new(),
             label_name: String::new(),
             packet_text: String::new(),
@@ -314,17 +314,20 @@ impl BotManagerWindow {
                     ScrollArea::vertical()
                         .id_salt("bot_mgr_right_scroll")
                         .auto_shrink([false, false])
-                        .show(ui, |ui| match self.tab {
-                            RightTab::Combat => dirty |= self.show_combat_tab(ui, &mut cfg),
-                            RightTab::Skills => dirty |= self.show_skills_tab(ui, &mut cfg),
-                            RightTab::Map => dirty |= self.show_map_tab(ui, &mut cfg),
-                            RightTab::Item => dirty |= self.show_item_tab(ui, &mut cfg),
-                            RightTab::Quest => dirty |= self.show_quest_tab(ui, &mut cfg),
-                            RightTab::Misc => dirty |= self.show_misc_tab(ui, &mut cfg),
-                            RightTab::Misc2 => dirty |= self.show_misc2_tab(ui, &mut cfg),
-                            RightTab::Options => dirty |= self.show_options_tab(ui, &mut cfg),
-                            RightTab::Bots => self.show_bots_tab(ui, &mut cfg, &mut dirty),
-                            RightTab::Info => self.show_info_tab(ui, &cfg),
+                        .show(ui, |ui| {
+                            ui.set_max_width(ui.available_width());
+                            match self.tab {
+                                RightTab::Combat => dirty |= self.show_combat_tab(ui, &mut cfg),
+                                RightTab::Skills => dirty |= self.show_skills_tab(ui, &mut cfg),
+                                RightTab::Map => dirty |= self.show_map_tab(ui, &mut cfg),
+                                RightTab::Item => dirty |= self.show_item_tab(ui, &mut cfg),
+                                RightTab::Quest => dirty |= self.show_quest_tab(ui, &mut cfg),
+                                RightTab::Misc => dirty |= self.show_misc_tab(ui, &mut cfg),
+                                RightTab::Misc2 => dirty |= self.show_misc2_tab(ui, &mut cfg),
+                                RightTab::Options => dirty |= self.show_options_tab(ui, &mut cfg),
+                                RightTab::Bots => self.show_bots_tab(ui, &mut cfg, &mut dirty),
+                                RightTab::Info => self.show_info_tab(ui, &cfg),
+                            }
                         });
                 });
 

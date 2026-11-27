@@ -2227,6 +2227,7 @@ dependencies = [
  "mimalloc",
  "os_info",
  "rand",
+ "rayon",
  "reqwest",
  "rfd",
  "ruffle_core",
@@ -2275,6 +2276,8 @@ dependencies = [
  "grimlite_frontend",
  "jni 0.22.4",
  "log",
+ "ndk",
+ "rayon",
  "reqwest",
  "ruffle_core",
  "ruffle_frontend_utils",
@@ -2317,11 +2320,15 @@ name = "grimlite_frontend"
 version = "0.1.0"
 dependencies = [
  "async-channel",
+ "bytemuck",
  "grimlite_bot",
  "ruffle_core",
+ "ruffle_http_cache",
+ "ruffle_render_wgpu",
  "serde_json",
  "tracing",
  "url",
+ "wgpu",
 ]
 
 [[package]]

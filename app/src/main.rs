@@ -358,13 +358,16 @@ fn mugetsu_args() -> Vec<std::ffi::OsString> {
 }
 
 fn main() -> Result<(), Error> {
-    // Grimlite Ri multi-tab: disable `ruffle_render_wgpu::segments` thread-local encoder queue so
-    // multiple account tabs sharing the main thread never steal each other's unfinished encoders
-    // (which caused wgpu `StagingBelt staging buffer is still mapped` validation errors).
-    // SAFETY: called at process startup before any other thread exists.
-    if env::var_os("RUFFLE_SERIAL_ENCODING").is_none() {
-        unsafe { env::set_var("RUFFLE_SERIAL_ENCODING", "1") };
-    }
+    // Configure global Rayon worker pool across all logical CPU cores (P + E cores on Apple Silicon,
+    // all threads on x86_64/ARM64) so Ruffle's parallel segment encoding (`segments::finish_encoders`)
+    // and background vector tessellation (`deferred_shapes`) spread evenly across every core.
+    let worker_threads = std::thread::available_parallelism()
+        .map(std::num::NonZero::get)
+        .unwrap_or(4);
+    let _ = rayon::ThreadPoolBuilder::new()
+        .num_threads(worker_threads)
+        .thread_name(|i| format!("grimlite-rayon-{i}"))
+        .build_global();
 
     // AQW build: started again after a graphics change: the previous Mugetsu ends first.
     mugetsu::wait_for_restarted_from();

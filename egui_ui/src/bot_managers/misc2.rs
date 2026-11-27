@@ -147,13 +147,13 @@ impl BotManagerWindow {
             group_box(&mut cols[0], "Load Map", |ui| {
                 ui.horizontal(|ui| {
                     let btn_w = 56.0;
-                    let input_w = (ui.available_width() - btn_w - 5.0).max(60.0);
+                    let input_w = (ui.available_width() - btn_w - 6.0).max(50.0);
                     ui.add(
                         TextEdit::singleline(&mut self.load_map_swf)
                             .hint_text("Map file (.swf)")
                             .desired_width(input_w),
                     );
-                    if theme::primary_button(ui, "Load", [ui.available_width().max(48.0), 21.0])
+                    if theme::primary_button(ui, "Load", [btn_w, 21.0])
                         .clicked()
                     {
                         let swf = self.load_map_swf.trim();
@@ -281,7 +281,7 @@ impl BotManagerWindow {
                     if ui.checkbox(&mut sp_on, "On").changed() {
                         self.bot.special_handler.set_enabled(sp_on);
                     }
-                    let cb_w = ui.available_width().max(110.0);
+                    let cb_w = ui.available_width().max(60.0);
                     let prev = self.special_zone;
                     theme::dropdown(
                         ui,
