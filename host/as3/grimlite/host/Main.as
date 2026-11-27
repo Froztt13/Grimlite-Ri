@@ -1,5 +1,6 @@
 package grimlite.host {
 import flash.display.DisplayObject;
+import flash.display.DisplayObjectContainer;
 import flash.display.Loader;
 import flash.display.MovieClip;
 import flash.display.Stage;
@@ -7,6 +8,7 @@ import flash.display.StageScaleMode;
 import flash.events.ErrorEvent;
 import flash.events.Event;
 import flash.events.IOErrorEvent;
+import flash.events.MouseEvent;
 import flash.events.SecurityErrorEvent;
 import flash.events.UncaughtErrorEvent;
 import flash.external.ExternalInterface;
@@ -14,13 +16,24 @@ import flash.net.URLLoader;
 import flash.net.URLRequest;
 import flash.system.Security;
 import flash.utils.setTimeout;
+import grimoire.Externalizer;
+import grimoire.Root;
+import grimoire.game.Bank;
+import grimoire.game.Inventory;
+import grimoire.game.Player;
+import grimoire.game.Quests;
+import grimoire.game.Settings;
+import grimoire.game.Shops;
+import grimoire.game.TempInventory;
+import grimoire.game.World;
 
 /**
- * Grimlite Ri host SWF: loads AQW's game client and bridges ExternalInterface calls to Rust.
- * Packet listening/manipulation/injection is handled directly in Ruffle's CaptureNavigator.
+ * Grimlite Ri host SWF entry point for Ruffle.
+ * Loads AQW's `Game.swf`, populates `grimoire.Root`, registers all Grimlite-Li callbacks
+ * via `grimoire.Externalizer`, and exposes Grimlite Ri's typed lowercase helpers.
  */
 public class Main extends MovieClip {
-    private static const VERSION:int = 3;
+    private static const VERSION:int = 4;
     private static const GAME_URL:String = "https://game.aq.com/game/";
     private static const TITLE:String = '<font color="#E63946">Grimlite Ri</font>';
     private static const VERSION_TRIES:int = 3;
@@ -54,6 +67,7 @@ public class Main extends MovieClip {
 
     private function start():void {
         stageRef = stage;
+        Root.StageRef = stage;
         try {
             Security.allowDomain("*");
         } catch (e:Error) {}
@@ -61,16 +75,26 @@ public class Main extends MovieClip {
         patchTrim();
         loaderInfo.uncaughtErrorEvents.addEventListener(UncaughtErrorEvent.UNCAUGHT_ERROR, onUncaughtError);
 
+        Externalizer.registerAll();
+        registerHostCallbacks();
+
+        callHost("requestLoadGame", []);
+        setTimeout(function():void {
+            if (!loading && game == null) {
+                loadClient();
+            }
+        }, 150);
+    }
+
+    private function registerHostCallbacks():void {
+        // Lifecycle & State
         expose("hostInfo", hostInfo);
         expose("loadClient", loadClient);
-        expose("getGameObject", getGameObject);
-        expose("setGameObject", setGameObject);
-        expose("callGameFunction0", callGameFunction0);
-        expose("callGameFunction", callGameFunction);
-        expose("isNull", isNull);
         expose("isLoggedIn", isLoggedIn);
         expose("username", username);
         expose("getPlayerState", getPlayerState);
+        expose("login", login);
+        expose("clickServer", clickServer);
 
         // Options
         expose("setInfiniteRange", setInfiniteRange);
@@ -86,42 +110,44 @@ public class Main extends MovieClip {
         expose("joinMap", joinMap);
         expose("moveToCell", moveToCell);
         expose("walkTo", walkTo);
+        expose("getPosition", getPosition);
         expose("setSpawnPoint", setSpawnPoint);
         expose("isMapLoading", isMapLoading);
+        expose("getCells", getCells);
 
         // Combat
         expose("attackMonster", attackMonster);
         expose("useSkill", useSkill);
+        expose("forceUseSkill", forceUseSkill);
+        expose("skillAvailable", skillAvailable);
         expose("cancelTarget", cancelTarget);
         expose("rest", rest);
         expose("isMonsterAvailable", isMonsterAvailable);
         expose("hasTarget", hasTarget);
 
-        // Inventory / Bank / Shop / Drops
+        // Inventory / Bank / Shop
         expose("hasItem", hasItem);
         expose("hasTempItem", hasTempItem);
         expose("hasBankItem", hasBankItem);
         expose("equipItem", equipItem);
+        expose("isEquipped", isEquipped);
         expose("loadShop", loadShop);
+        expose("isShopLoaded", isShopLoaded);
         expose("buyItem", buyItem);
         expose("sellItem", sellItem);
         expose("transferToBank", transferToBank);
         expose("transferToInv", transferToInv);
+        expose("openBank", openBank);
         expose("getMapItem", getMapItem);
 
         // Quests
         expose("loadQuest", loadQuest);
+        expose("isQuestLoaded", isQuestLoaded);
+        expose("isQuestCompletedOnce", isQuestCompletedOnce);
         expose("acceptQuest", acceptQuest);
         expose("completeQuest", completeQuest);
         expose("isQuestInProgress", isQuestInProgress);
         expose("canCompleteQuest", canCompleteQuest);
-
-        callHost("requestLoadGame", []);
-        setTimeout(function():void {
-            if (!loading && game == null) {
-                loadClient();
-            }
-        }, 150);
     }
 
     private static function patchTrim():void {
@@ -157,6 +183,7 @@ public class Main extends MovieClip {
         return JSON.stringify({
             name: "grimlite-ri",
             version: VERSION,
+            base: "grimlite-li-swf",
             callbacks: callbacks
         });
     }
@@ -215,6 +242,8 @@ public class Main extends MovieClip {
 
     private function onClientInit(event:Event):void {
         game = loader.content;
+        Root.Game = game;
+        Root.GameDomain = loader.contentLoaderInfo.applicationDomain;
         setParams();
     }
 
@@ -234,6 +263,8 @@ public class Main extends MovieClip {
 
     private function onClientLoaded(event:Event):void {
         game = loader.content;
+        Root.Game = game;
+        Root.GameDomain = loader.contentLoaderInfo.applicationDomain;
         if (!paramsSet) {
             setParams();
         }
@@ -252,56 +283,68 @@ public class Main extends MovieClip {
             return;
         }
         if (optSkipCutscenes) {
-            try {
-                if (game.mcExtSWF != null && game.mcExtSWF.numChildren > 0) {
-                    game.mcExtSWF.removeChildren();
-                    game.world.visible = true;
-                }
-            } catch (e:Error) {}
+            Settings.SetSkipCutscenes();
         }
         if (optEnemyMagnet) {
-            try {
-                var target:* = game.world.myAvatar.target;
-                var me:* = game.world.myAvatar.pMC;
-                if (target != null && target.pMC != null && me != null) {
-                    target.pMC.x = me.x;
-                    target.pMC.y = me.y;
-                }
-            } catch (e:Error) {}
+            Settings.SetEnemyMagnet();
         }
         if (optDisableAnimations) {
-            try {
-                var avatars:Object = game.world.avatars;
-                for (var key:String in avatars) {
-                    var av:* = avatars[key];
-                    if (av != null && av.pMC != null && av.pMC.mcChar != null) {
-                        av.pMC.mcChar.gotoAndStop("Idle");
-                    }
-                }
-            } catch (e:Error) {}
+            Settings.DisableAnimationsFrame();
         }
     }
 
-    // ---- Batched Player State ----
+    // ---- Auth & Player State ----
+
+    private function login(user:String, pass:String):String {
+        try {
+            Root.Username = user;
+            Root.Password = pass;
+            if (game != null && game.login is Function) {
+                game.login(user, pass);
+                return "true";
+            }
+        } catch (e:Error) {}
+        return "false";
+    }
+
+    private function clickServer(name:String):String {
+        try {
+            if (game != null && game.mcLogin != null && game.mcLogin.sl != null && game.mcLogin.sl.iList != null) {
+                var list:DisplayObjectContainer = game.mcLogin.sl.iList;
+                var wanted:String = String(name).toLowerCase();
+                for (var i:int = 0; i < list.numChildren; i++) {
+                    var entry:* = list.getChildAt(i);
+                    try {
+                        if (String(entry.tName.ti.text).toLowerCase().indexOf(wanted) >= 0) {
+                            DisplayObject(entry).dispatchEvent(new MouseEvent(MouseEvent.CLICK));
+                            return "true";
+                        }
+                    } catch (err:Error) {}
+                }
+            }
+        } catch (e:Error) {}
+        return "false";
+    }
+
+    private function isLoggedIn():String {
+        return Player.IsLoggedIn() == Root.TrueString ? "true" : "false";
+    }
+
+    private function username():String {
+        try {
+            return String(game.world.myAvatar.objData.strUsername || "");
+        } catch (e:Error) {}
+        return "";
+    }
 
     private function getPlayerState():String {
         var out:Object = {
-            loggedIn: false,
-            username: "",
-            hp: 0,
-            maxHp: 0,
-            mp: 0,
-            maxMp: 0,
-            level: 0,
-            gold: 0,
-            map: "",
-            cell: "",
-            pad: "",
-            state: 0,
-            alive: false,
-            targetName: "",
-            targetHp: 0,
-            targetMaxHp: 0
+            loggedIn: false, username: "",
+            hp: 0, maxHp: 0, mp: 0, maxMp: 0,
+            level: 0, gold: 0,
+            map: "", cell: "", pad: "",
+            state: 0, alive: false,
+            targetName: "", targetHp: 0, targetMaxHp: 0
         };
         try {
             if (game != null && game.sfc != null && game.sfc.isConnected && game.world != null && game.world.myAvatar != null) {
@@ -332,44 +375,16 @@ public class Main extends MovieClip {
         return JSON.stringify(out);
     }
 
-    // ---- Grimlite-Li Options ----
+    // ---- Options ----
 
     private function setInfiniteRange(on:* = true):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.actions != null) {
-                var range:int = (on == true || on == "true") ? 20000 : 300;
-                var active:Array = game.world.actions.active;
-                if (active != null) {
-                    for (var i:int = 0; i < active.length; i++) {
-                        if (active[i] != null) {
-                            active[i].range = range;
-                        }
-                    }
-                }
-                var passive:Array = game.world.actions.passive;
-                if (passive != null) {
-                    for (var j:int = 0; j < passive.length; j++) {
-                        if (passive[j] != null) {
-                            passive[j].range = range;
-                        }
-                    }
-                }
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Settings.SetInfiniteRange(on == true || on == "true");
+        return "true";
     }
 
     private function aggroMonsters():String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.aggroAllMon is Function) {
-                game.world.aggroAllMon();
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Settings.SetProvokeMonsters();
+        return "true";
     }
 
     private function setEnemyMagnet(on:* = true):String {
@@ -378,15 +393,8 @@ public class Main extends MovieClip {
     }
 
     private function setLagKiller(on:* = true):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                var hide:Boolean = (on == true || on == "true");
-                game.world.visible = !hide;
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Settings.SetLagKiller((on == true || on == "true") ? "True" : "False");
+        return "true";
     }
 
     private function setDisableAnimations(on:* = true):String {
@@ -400,512 +408,92 @@ public class Main extends MovieClip {
     }
 
     private function setFPS(fps:* = 30):String {
-        var ok:String = "false";
-        try {
-            var rate:Number = Number(fps);
-            if (stageRef != null && rate > 0) {
-                stageRef.frameRate = rate;
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Root.setFPS(String(fps));
+        return "true";
     }
 
     private function setWalkSpeed(speed:* = 8):String {
-        var ok:String = "false";
-        try {
-            var spd:int = int(speed);
-            if (game != null && game.world != null && spd > 0) {
-                game.world.WALKSPEED = spd;
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Player.SetWalkSpeed(String(speed));
+        return "true";
     }
 
     // ---- Map ----
 
     private function joinMap(map:String, cell:String = "Enter", pad:String = "Spawn"):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.gotoTown(map, cell, pad);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Player.Join(map, cell, pad);
+        return "true";
     }
 
     private function moveToCell(cell:String, pad:String = "Spawn"):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.moveToCell(cell, pad);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Player.Jump(cell, pad);
+        return "true";
     }
 
     private function walkTo(x:int, y:int):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null && game.world.myAvatar.pMC != null) {
-                game.world.myAvatar.pMC.walkTo(x, y, game.world.WALKSPEED);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        Player.WalkToPoint(String(x), String(y));
+        return "true";
     }
 
-    private function setSpawnPoint():String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.setSpawnPoint(game.world.strFrame, game.world.strPad);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function isMapLoading():String {
-        var res:String = "false";
-        try {
-            if (game != null && game.mcConnDetail != null) {
-                res = game.mcConnDetail.stage != null ? "true" : "false";
-            }
-        } catch (e:Error) {}
-        return res;
-    }
+    private function getPosition():String { return Player.Position(); }
+    private function setSpawnPoint():String { World.SetSpawnPoint(); return "true"; }
+    private function isMapLoading():String { return World.MapLoadComplete() == Root.TrueString ? "false" : "true"; }
+    private function getCells():String { return World.GetCells(); }
 
     // ---- Combat ----
 
-    private function findMonster(name:String):* {
-        if (game == null || game.world == null || game.world.monsters == null) {
-            return null;
-        }
-        var lower:String = (name != null) ? name.toLowerCase() : "*";
-        var frame:String = String(game.world.strFrame || "");
-        var mons:Array = game.world.monsters;
-        for (var i:int = 0; i < mons.length; i++) {
-            var m:* = mons[i];
-            if (m == null || m.objData == null || m.dataLeaf == null) {
-                continue;
-            }
-            if (String(m.dataLeaf.strFrame) != frame) {
-                continue;
-            }
-            if (int(m.dataLeaf.intHP) <= 0 || int(m.dataLeaf.intState) <= 0) {
-                continue;
-            }
-            var monName:String = String(m.objData.strMonName || "").toLowerCase();
-            if (lower == "*" || lower.length == 0 || monName == lower || monName.indexOf(lower) >= 0) {
-                return m;
-            }
-        }
-        return null;
-    }
-
     private function isMonsterAvailable(name:String = "*"):String {
-        var res:String = "false";
-        try {
-            res = findMonster(name) != null ? "true" : "false";
-        } catch (e:Error) {}
-        return res;
+        return World.IsMonsterAvailable(name) == Root.TrueString ? "true" : "false";
     }
 
     private function attackMonster(name:String = "*"):String {
-        var ok:String = "false";
-        try {
-            var m:* = findMonster(name);
-            if (m != null && game.world != null) {
-                game.world.setTarget(m);
-                game.world.approachTarget();
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        if (World.GetMonsterByName(name) == null) return "false";
+        Player.AttackMonster(name);
+        return "true";
     }
 
-    private function useSkill(index:String):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.actions != null) {
-                var idx:int = int(index);
-                var skill:* = game.world.actions.active[idx];
-                if (skill != null && skill.isOK) {
-                    game.world.testAction(skill);
-                    ok = "true";
-                }
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
+    private function useSkill(index:String):String { Player.UseSkill(index); return "true"; }
+    private function forceUseSkill(index:String):String { Player.ForceUseSkill(index); return "true"; }
+    private function skillAvailable(index:String):String { return String(Player.SkillAvailable(index)); }
+    private function rest(full:* = false):String { Player.Rest(); return "true"; }
+    private function hasTarget():String { return Player.HasTarget() == Root.TrueString ? "true" : "false"; }
 
     private function cancelTarget():String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.cancelTarget();
-                game.world.cancelAutoAttack();
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function rest(full:* = false):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.rest();
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function hasTarget():String {
-        var res:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null) {
-                var t:* = game.world.myAvatar.target;
-                if (t != null && t.dataLeaf != null && int(t.dataLeaf.intHP) > 0) {
-                    res = "true";
-                }
-            }
-        } catch (e:Error) {}
-        return res;
+        Player.CancelTarget();
+        Player.CancelTargetSelf();
+        Player.CancelAutoAttack();
+        return "true";
     }
 
     // ---- Inventory / Bank / Shop ----
 
-    private static function checkListQty(list:Array, name:String, qty:int):Boolean {
-        if (list == null || name == null) {
-            return false;
-        }
-        var lower:String = name.toLowerCase();
-        for (var i:int = 0; i < list.length; i++) {
-            var it:* = list[i];
-            if (it != null && String(it.sName || "").toLowerCase() == lower) {
-                var have:int = int(it.iQty || 1);
-                if (qty <= 0 || have >= qty) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-
-    private function hasItem(name:String, qty:int = 1):String {
-        var res:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null) {
-                res = checkListQty(game.world.myAvatar.items, name, qty) ? "true" : "false";
-            }
-        } catch (e:Error) {}
-        return res;
-    }
-
-    private function hasTempItem(name:String, qty:int = 1):String {
-        var res:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null) {
-                res = checkListQty(game.world.myAvatar.tempitems, name, qty) ? "true" : "false";
-            }
-        } catch (e:Error) {}
-        return res;
-    }
-
-    private function hasBankItem(name:String, qty:int = 1):String {
-        var res:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.bankinfo != null) {
-                res = checkListQty(game.world.bankinfo.items, name, qty) ? "true" : "false";
-            }
-        } catch (e:Error) {}
-        return res;
-    }
+    private function hasItem(name:String, qty:int = 1):String { return Inventory.HasItem(name, qty) ? "true" : "false"; }
+    private function hasTempItem(name:String, qty:int = 1):String { return TempInventory.ItemIsInTemp(name, qty <= 0 ? "*" : String(qty)) == Root.TrueString ? "true" : "false"; }
+    private function hasBankItem(name:String, qty:int = 1):String { return Bank.HasItem(name, qty) ? "true" : "false"; }
+    private function isEquipped(name:String):String { return Inventory.IsEquipped(name) ? "true" : "false"; }
+    private function loadShop(shopId:int):String { Shops.Load(String(shopId)); return "true"; }
+    private function isShopLoaded(shopId:int = 0):String { return Shops.IsShopLoaded(shopId) == Root.TrueString ? "true" : "false"; }
+    private function buyItem(shopId:int, name:String):String { Shops.BuyItem(name); return "true"; }
+    private function sellItem(name:String):String { Shops.SellItem(name); return "true"; }
+    private function transferToBank(name:String):String { Bank.TransferToBank(name); return "true"; }
+    private function transferToInv(name:String):String { Bank.TransferToInventory(name); return "true"; }
+    private function openBank():String { Bank.Show(); return "true"; }
+    private function getMapItem(id:int):String { Player.GetMapItem(String(id)); return "true"; }
 
     private function equipItem(name:String):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null) {
-                var lower:String = name.toLowerCase();
-                var items:Array = game.world.myAvatar.items;
-                for (var i:int = 0; i < items.length; i++) {
-                    var it:* = items[i];
-                    if (it != null && String(it.sName || "").toLowerCase() == lower) {
-                        game.world.sendEquipItemRequest(it);
-                        ok = "true";
-                        break;
-                    }
-                }
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function loadShop(shopId:int):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.sendLoadShopRequest(shopId);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function buyItem(shopId:int, name:String):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.shopinfo != null) {
-                var lower:String = name.toLowerCase();
-                var items:Array = game.world.shopinfo.items;
-                for (var i:int = 0; i < items.length; i++) {
-                    var it:* = items[i];
-                    if (it != null && String(it.sName || "").toLowerCase() == lower) {
-                        game.world.sendBuyItemRequest(it);
-                        ok = "true";
-                        break;
-                    }
-                }
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function sellItem(name:String):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null) {
-                var lower:String = name.toLowerCase();
-                var items:Array = game.world.myAvatar.items;
-                for (var i:int = 0; i < items.length; i++) {
-                    var it:* = items[i];
-                    if (it != null && String(it.sName || "").toLowerCase() == lower) {
-                        game.world.sendSellItemRequest(it);
-                        ok = "true";
-                        break;
-                    }
-                }
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function transferToBank(name:String):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null) {
-                var lower:String = name.toLowerCase();
-                var items:Array = game.world.myAvatar.items;
-                for (var i:int = 0; i < items.length; i++) {
-                    var it:* = items[i];
-                    if (it != null && String(it.sName || "").toLowerCase() == lower) {
-                        game.world.sendBankFromInvRequest(it);
-                        ok = "true";
-                        break;
-                    }
-                }
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function transferToInv(name:String):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null && game.world.bankinfo != null) {
-                var lower:String = name.toLowerCase();
-                var items:Array = game.world.bankinfo.items;
-                for (var i:int = 0; i < items.length; i++) {
-                    var it:* = items[i];
-                    if (it != null && String(it.sName || "").toLowerCase() == lower) {
-                        game.world.sendBankToInvRequest(it);
-                        ok = "true";
-                        break;
-                    }
-                }
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function getMapItem(id:int):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.getMapItem(id);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
+        var it:Object = Inventory.GetItemByName(name);
+        if (it == null) return "false";
+        Player.Equip(String(it.ItemID));
+        return "true";
     }
 
     // ---- Quests ----
 
-    private function loadQuest(id:int):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.showQuests(String(id), "q");
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function acceptQuest(id:int):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.acceptQuest(id);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function completeQuest(id:int, itemId:int = -1):String {
-        var ok:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                game.world.tryQuestComplete(id, itemId, false);
-                ok = "true";
-            }
-        } catch (e:Error) {}
-        return ok;
-    }
-
-    private function isQuestInProgress(id:int):String {
-        var res:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                res = game.world.isQuestInProgress(id) ? "true" : "false";
-            }
-        } catch (e:Error) {}
-        return res;
-    }
-
-    private function canCompleteQuest(id:int):String {
-        var res:String = "false";
-        try {
-            if (game != null && game.world != null) {
-                res = game.world.canTurnInQuest(id) ? "true" : "false";
-            }
-        } catch (e:Error) {}
-        return res;
-    }
-
-    // ---- Generic Game Bridge ----
-
-    private function resolvePath(path:String):* {
-        if (game == null || path == null || path.length == 0) {
-            return null;
-        }
-        var cur:* = game;
-        var parts:Array = path.split(".");
-        for (var i:int = 0; i < parts.length; i++) {
-            if (cur == null) {
-                return null;
-            }
-            cur = cur[parts[i]];
-        }
-        return cur;
-    }
-
-    private function getGameObject(path:String):String {
-        var res:String = "null";
-        try {
-            res = JSON.stringify(resolvePath(path));
-        } catch (e:Error) {
-            res = "null";
-        }
-        return res;
-    }
-
-    private function setGameObject(path:String, value:*):String {
-        var ok:String = "false";
-        try {
-            if (game != null && path != null) {
-                var parts:Array = path.split(".");
-                var last:String = String(parts.pop());
-                var cur:* = game;
-                for (var i:int = 0; i < parts.length; i++) {
-                    if (cur == null) {
-                        return "false";
-                    }
-                    cur = cur[parts[i]];
-                }
-                if (cur != null) {
-                    cur[last] = value;
-                    ok = "true";
-                }
-            }
-        } catch (e:Error) {
-            ok = "false";
-        }
-        return ok;
-    }
-
-    private function callGameFunction0(path:String):String {
-        return callGameFunction(path);
-    }
-
-    private function callGameFunction(path:String, ...args):String {
-        var resStr:String = "null";
-        try {
-            if (game != null && path != null) {
-                var parts:Array = path.split(".");
-                var fnName:String = String(parts.pop());
-                var target:* = game;
-                for (var i:int = 0; i < parts.length; i++) {
-                    if (target == null) {
-                        return "null";
-                    }
-                    target = target[parts[i]];
-                }
-                if (target != null && (target[fnName] is Function)) {
-                    var res:* = Function(target[fnName]).apply(target, args);
-                    resStr = JSON.stringify(res);
-                }
-            }
-        } catch (e:Error) {
-            resStr = "null";
-        }
-        return resStr;
-    }
-
-    private function isNull(path:String):String {
-        var res:String = "true";
-        try {
-            res = resolvePath(path) == null ? "true" : "false";
-        } catch (e:Error) {
-            res = "true";
-        }
-        return res;
-    }
-
-    private function isLoggedIn():String {
-        var res:String = "false";
-        try {
-            res = (game != null && game.sfc != null && game.sfc.isConnected && game.world != null && game.world.myAvatar != null) ? "true" : "false";
-        } catch (e:Error) {
-            res = "false";
-        }
-        return res;
-    }
-
-    private function username():String {
-        try {
-            if (game != null && game.world != null && game.world.myAvatar != null && game.world.myAvatar.objData != null) {
-                return String(game.world.myAvatar.objData.strUsername || "");
-            }
-        } catch (e:Error) {}
-        return "";
-    }
+    private function loadQuest(id:int):String { Quests.Load(String(id)); return "true"; }
+    private function isQuestLoaded(id:int):String { return Quests.IsLoaded(id) ? "true" : "false"; }
+    private function isQuestCompletedOnce(id:int):String { return Quests.IsCompletedOnce(id) ? "true" : "false"; }
+    private function acceptQuest(id:int):String { Quests.Accept(String(id)); return "true"; }
+    private function completeQuest(id:int, itemId:int = -1, qty:int = 1):String { Quests.Complete(String(id), qty, String(itemId), "False"); return "true"; }
+    private function isQuestInProgress(id:int):String { return Quests.IsInProgress(String(id)) == Root.TrueString ? "true" : "false"; }
+    private function canCompleteQuest(id:int):String { return Quests.CanComplete(String(id)) == Root.TrueString ? "true" : "false"; }
 }
 }
