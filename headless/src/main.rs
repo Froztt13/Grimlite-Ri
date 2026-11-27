@@ -32,12 +32,19 @@ const SERVERS: &[&str] = &[
 ];
 
 const PACKET_LOG_CAPACITY: usize = 500;
+const APP_ICON_RGBA: &[u8] = include_bytes!("../../app/assets/grimlite-icon-64.rgba");
 
 fn main() -> eframe::Result {
+    let icon = egui::IconData {
+        rgba: APP_ICON_RGBA.to_vec(),
+        width: 64,
+        height: 64,
+    };
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Grimlite Ri — Headless")
-            .with_inner_size([1080.0, 680.0]),
+            .with_inner_size([1080.0, 680.0])
+            .with_icon(Arc::new(icon)),
         ..Default::default()
     };
 

@@ -168,7 +168,7 @@ http://wixtoolset.org/schemas/v4/wxs/util https://raw.githubusercontent.com/wixt
         <SetProperty Id='ARPINSTALLLOCATION' Value='[APPLICATIONFOLDER]' After='CostFinalize'/>
 
 
-        <Icon Id='Icon.ico' SourceFile='../../../assets/favicon.ico'/>
+        <Icon Id='Icon.ico' SourceFile='../../../assets/grimlite-ri.ico'/>
         <Property Id='ARPPRODUCTICON' Value='Icon.ico'/>
 
         <Property Id='ARPHELPLINK' Value='https://ruffle.rs'/>

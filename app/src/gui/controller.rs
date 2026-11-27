@@ -695,7 +695,8 @@ impl GuiController {
     }
 
     pub fn needs_render(&self) -> bool {
-        Instant::now().duration_since(self.last_update) >= self.repaint_after
+        crate::gui::viewports::has_pending_events()
+            || Instant::now().duration_since(self.last_update) >= self.repaint_after
     }
 
     pub fn show_open_dialog(&mut self) {

@@ -68,9 +68,9 @@ fn set_windows_resource() -> Result<(), Box<dyn Error>> {
     // Set language to US English (0x0409)
     res.set_language(0x0409);
 
-    // Set the application icon
+    // Set the application icon (Grimlite Ri)
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR not set");
-    let icon_path = format!("{manifest_dir}/assets/favicon.ico");
+    let icon_path = format!("{manifest_dir}/assets/grimlite-ri.ico");
 
     println!("cargo:rerun-if-changed={icon_path}");
 

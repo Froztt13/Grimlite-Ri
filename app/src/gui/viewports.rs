@@ -14,7 +14,9 @@ use std::sync::{Arc, Mutex};
 use winit::dpi::PhysicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
-use winit::window::{Window, WindowId};
+use winit::window::{Icon, Window, WindowId};
+
+const CHILD_ICON_RGBA: &[u8] = include_bytes!("../../assets/grimlite-icon-64.rgba");
 
 struct ChildViewport {
     window: Arc<Window>,
@@ -32,6 +34,7 @@ struct ViewportStore {
     children: HashMap<ViewportId, ChildViewport>,
     window_to_viewport: HashMap<WindowId, ViewportId>,
     active_event_loop: *const ActiveEventLoop,
+    pending_events: bool,
 }
 
 impl Default for ViewportStore {
@@ -43,6 +46,7 @@ impl Default for ViewportStore {
             children: HashMap::new(),
             window_to_viewport: HashMap::new(),
             active_event_loop: std::ptr::null(),
+            pending_events: false,
         }
     }
 }
@@ -86,6 +90,7 @@ pub fn run_frame<R>(event_loop: &ActiveEventLoop, f: impl FnOnce() -> R) -> R {
     VIEWPORTS.with(|store| {
         let mut s = store.borrow_mut();
         s.active_event_loop = event_loop as *const ActiveEventLoop;
+        s.pending_events = false;
         for child in s.children.values_mut() {
             child.used_this_frame = false;
         }
@@ -140,13 +145,32 @@ pub fn handle_window_event(window_id: WindowId, event: &WindowEvent) -> bool {
                 .configure(&desc.device, &child.surface_config);
         }
 
-        let _ = child.egui_winit.on_window_event(&child.window, event);
+        let response = child.egui_winit.on_window_event(&child.window, event);
+        if response.repaint
+            || matches!(
+                event,
+                WindowEvent::CloseRequested
+                    | WindowEvent::Resized(_)
+                    | WindowEvent::MouseInput { .. }
+                    | WindowEvent::CursorMoved { .. }
+                    | WindowEvent::MouseWheel { .. }
+                    | WindowEvent::KeyboardInput { .. }
+                    | WindowEvent::Focused(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
+            )
+        {
+            s.pending_events = true;
+        }
         true
     })
 }
 
 pub fn has_open_viewports() -> bool {
     VIEWPORTS.with(|store| !store.borrow().children.is_empty())
+}
+
+pub fn has_pending_events() -> bool {
+    VIEWPORTS.with(|store| store.borrow().pending_events)
 }
 
 /// Drops all detached child windows cleanly before the graphics device shuts down.
@@ -194,7 +218,12 @@ fn render_immediate_viewport(ctx: &Context, mut viewport: ImmediateViewport<'_>)
             // and cleared by `EventLoopGuard` before `run_frame` returns.
             let event_loop = unsafe { &*event_loop_ptr };
             let window = match egui_winit::create_window(ctx, event_loop, &viewport.builder) {
-                Ok(w) => Arc::new(w),
+                Ok(w) => {
+                    if let Ok(icon) = Icon::from_rgba(CHILD_ICON_RGBA.to_vec(), 64, 64) {
+                        w.set_window_icon(Some(icon));
+                    }
+                    Arc::new(w)
+                }
                 Err(e) => {
                     tracing::error!("Failed to create child viewport window: {e}");
                     return;
@@ -207,16 +236,37 @@ fn render_immediate_viewport(ctx: &Context, mut viewport: ImmediateViewport<'_>)
                     return;
                 }
             };
+            let caps = surface.get_capabilities(&descriptors.adapter);
+            let chosen_format = if caps.formats.contains(&surface_format) {
+                surface_format
+            } else {
+                caps.formats.first().copied().unwrap_or(surface_format)
+            };
+            // Prefer non-blocking present modes so child windows never stall main-thread VSync on Windows DX12.
+            let present_mode = [
+                wgpu::PresentMode::Mailbox,
+                wgpu::PresentMode::Immediate,
+                wgpu::PresentMode::FifoRelaxed,
+                wgpu::PresentMode::Fifo,
+            ]
+            .into_iter()
+            .find(|m| caps.present_modes.contains(m))
+            .unwrap_or(wgpu::PresentMode::Fifo);
+            let alpha_mode = caps
+                .alpha_modes
+                .first()
+                .copied()
+                .unwrap_or(wgpu::CompositeAlphaMode::Auto);
             let size: PhysicalSize<u32> = window.inner_size();
             let surface_config = wgpu::SurfaceConfiguration {
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: surface_format,
+                format: chosen_format,
                 color_space: wgpu::SurfaceColorSpace::Auto,
                 width: size.width.max(1),
                 height: size.height.max(1),
-                present_mode: Default::default(),
+                present_mode,
                 desired_maximum_frame_latency: 2,
-                alpha_mode: Default::default(),
+                alpha_mode,
                 view_formats: Default::default(),
             };
             surface.configure(&descriptors.device, &surface_config);
@@ -225,7 +275,7 @@ fn render_immediate_viewport(ctx: &Context, mut viewport: ImmediateViewport<'_>)
                 ctx.clone(),
                 vp_id,
                 window.as_ref(),
-                None,
+                Some(window.scale_factor() as f32),
                 None,
                 None,
             );

@@ -903,7 +903,8 @@ impl MainWindow {
                 // a frame all the time) it read 346 for a limit of 144, as if the limit had
                 // not been taken. Not under 60 a second though, so that a menu stays smooth
                 // at a low limit.
-                if uncapped && !rendered_movie {
+                let child_pending = crate::gui::viewports::has_pending_events();
+                if uncapped && !rendered_movie && !child_pending {
                     let menus_want = self.gui.needs_render() && self.gui.wants_redraws();
                     // (TEST SWITCH: `RUFFLE_TEST_MENU_FRAMES_FREE=1`: as it was, for comparisons.)
                     static FREE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -921,7 +922,7 @@ impl MainWindow {
                         return;
                     }
                 }
-                if interpolating && !uncapped && thread_micros.is_some() {
+                if interpolating && !uncapped && !child_pending && thread_micros.is_some() {
                     if rendered_movie {
                         self.repeats_since_picture = 0;
                     } else if self.repeats_since_picture + 1 >= self.draw_divisor
@@ -2083,8 +2084,8 @@ impl ApplicationHandler<RuffleEvent> for App {
 
         if cause == StartCause::Init {
             let movie_url = self.preferences.cli.movie_url.clone();
-            // AQW build: Mugetsu's icon (64 px so the taskbar copy stays sharp).
-            let icon_bytes = include_bytes!("../assets/mugetsu-icon-64.rgba");
+            // Grimlite Ri window/taskbar icon (64x64 RGBA, matches macOS .icns and Windows .ico).
+            let icon_bytes = include_bytes!("../assets/grimlite-icon-64.rgba");
             let icon =
                 Icon::from_rgba(icon_bytes.to_vec(), 64, 64).expect("App icon should be correct");
 

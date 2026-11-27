@@ -3,6 +3,7 @@
 pub mod bot_managers;
 pub mod command_editor;
 pub mod maid;
+pub mod system;
 pub mod theme;
 pub mod tools;
 
@@ -53,11 +54,17 @@ pub fn show_detached_window_sized(
         return;
     }
     let viewport_id = ViewportId::from_hash_of(id);
+    let icon = Arc::new(egui::IconData {
+        rgba: APP_ICON_RGBA.to_vec(),
+        width: 64,
+        height: 64,
+    });
     let mut builder = ViewportBuilder::default()
         .with_title(title)
         .with_inner_size(default_size)
         .with_resizable(true)
-        .with_always_on_top();
+        .with_always_on_top()
+        .with_icon(icon);
     if let Some(min) = min_size {
         builder = builder.with_min_inner_size(min);
     }
@@ -115,6 +122,7 @@ pub struct GrimliteUi {
     options: BotOptions,
     theme_applied: bool,
     app_icon: Option<egui::TextureHandle>,
+    resources: system::ResourceMonitor,
 
     // Header Cell/Pad quick-jump state (Grimlite-Li style)
     jump_cell: String,
@@ -142,6 +150,7 @@ impl GrimliteUi {
             options,
             theme_applied: false,
             app_icon: None,
+            resources: system::ResourceMonitor::default(),
             jump_cell: "Enter".to_string(),
             jump_pad: "Spawn".to_string(),
             last_map_name: String::new(),
@@ -407,13 +416,20 @@ impl GrimliteUi {
             })
             .clone();
 
+        // Poll process CPU & RAM at 1 Hz only while the About window is open
+        let res = self
+            .resources
+            .sample(std::time::Duration::from_secs(1))
+            .clone();
+        ctx.request_repaint_after(std::time::Duration::from_secs(1));
+
         let mut open = self.show_about;
         show_detached_window_sized(
             ctx,
             "grimlite_about",
             "About Grimlite Ri",
-            [400.0, 335.0],
-            Some([360.0, 315.0]),
+            [400.0, 445.0],
+            Some([360.0, 420.0]),
             &mut open,
             |ui| {
                 ui.vertical_centered(|ui| {
@@ -470,6 +486,39 @@ impl GrimliteUi {
                         ui.hyperlink_to("github.com/Froztt13/Grimlite-Ri", GITHUB_URL);
                         ui.end_row();
                     });
+
+                ui.add_space(8.0);
+
+                theme::card(ui, "Resource Monitor", |ui| {
+                    ui.spacing_mut().item_spacing.y = 5.0;
+                    let cpu_frac = (res.cpu_percent / 100.0).clamp(0.0, 1.0);
+                    theme::stat_bar(
+                        ui,
+                        "CPU",
+                        &format!("{:.1}%", res.cpu_percent),
+                        cpu_frac,
+                        Color32::from_rgb(52, 152, 219),
+                    );
+                    let ram_scale = res.peak_ram_mb.max(512.0);
+                    let ram_frac = (res.ram_mb / ram_scale).clamp(0.0, 1.0);
+                    theme::stat_bar(
+                        ui,
+                        "RAM",
+                        &format!("{:.1} MB (Peak {:.1} MB)", res.ram_mb, res.peak_ram_mb),
+                        ram_frac,
+                        Color32::from_rgb(46, 170, 115),
+                    );
+                    ui.horizontal(|ui| {
+                        let h = res.uptime_secs / 3600;
+                        let m = (res.uptime_secs % 3600) / 60;
+                        let s = res.uptime_secs % 60;
+                        ui.label(
+                            RichText::new(format!("Uptime  {h:02}:{m:02}:{s:02}"))
+                                .small()
+                                .weak(),
+                        );
+                    });
+                });
             },
         );
         self.show_about = open;

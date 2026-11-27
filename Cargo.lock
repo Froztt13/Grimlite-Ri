@@ -2164,6 +2164,7 @@ dependencies = [
  "ruffle_render",
  "tokio",
  "url",
+ "winresource",
 ]
 
 [[package]]
