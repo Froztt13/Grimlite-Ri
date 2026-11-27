@@ -10,6 +10,7 @@ use std::sync::Arc;
 pub enum HotkeyAction {
     ToggleBot,
     ToggleAutoAttack,
+    ToggleMaid,
     OpenBank,
     ToggleLagKiller,
     ToggleInfiniteRange,
@@ -18,6 +19,7 @@ pub enum HotkeyAction {
     Rest,
     CancelTarget,
     ShowBotManager,
+    ShowMaid,
     ShowTravels,
     ShowLoaders,
     ShowCosmetics,
@@ -27,6 +29,7 @@ impl HotkeyAction {
     const ALL: &[Self] = &[
         Self::ToggleBot,
         Self::ToggleAutoAttack,
+        Self::ToggleMaid,
         Self::OpenBank,
         Self::ToggleLagKiller,
         Self::ToggleInfiniteRange,
@@ -35,6 +38,7 @@ impl HotkeyAction {
         Self::Rest,
         Self::CancelTarget,
         Self::ShowBotManager,
+        Self::ShowMaid,
         Self::ShowTravels,
         Self::ShowLoaders,
         Self::ShowCosmetics,
@@ -44,6 +48,7 @@ impl HotkeyAction {
         match self {
             Self::ToggleBot => "Start / Stop Bot",
             Self::ToggleAutoAttack => "Toggle Auto Attack",
+            Self::ToggleMaid => "Start / Stop Maid",
             Self::OpenBank => "Open Bank",
             Self::ToggleLagKiller => "Toggle Lag Killer",
             Self::ToggleInfiniteRange => "Toggle Infinite Range",
@@ -52,6 +57,7 @@ impl HotkeyAction {
             Self::Rest => "Rest",
             Self::CancelTarget => "Cancel Target",
             Self::ShowBotManager => "Toggle Bot Manager",
+            Self::ShowMaid => "Toggle Maid Remake",
             Self::ShowTravels => "Toggle Fast Travel",
             Self::ShowLoaders => "Toggle Loader / Grabber",
             Self::ShowCosmetics => "Toggle Cosmetics",
@@ -95,6 +101,7 @@ struct HotkeyBinding {
 #[derive(Default)]
 pub struct HotkeyEffects {
     pub toggle_bot_manager: bool,
+    pub toggle_maid: bool,
     pub toggle_travels: bool,
     pub toggle_loaders: bool,
     pub toggle_cosmetics: bool,
@@ -144,16 +151,8 @@ impl HotkeysWindow {
 
     /// Checks keyboard input across both the main game window and all detached child windows
     /// (skipped while typing in a text field) and executes matching hotkey actions.
-    pub fn poll(&self, ctx: &Context) -> HotkeyEffects {
+    pub fn poll_with_keys(&self, ctx: &Context, child_keys: &[Key]) -> HotkeyEffects {
         let mut effects = HotkeyEffects::default();
-
-        // Always drain child-viewport key buffer so stale presses don't linger
-        let child_keys: Vec<Key> = ctx.data_mut(|d| {
-            let buf = d.get_temp_mut_or_default::<Vec<Key>>(egui::Id::new(
-                "grimlite_child_pressed_keys",
-            ));
-            std::mem::take(buf)
-        });
 
         if !self.enabled {
             return effects;
@@ -178,6 +177,9 @@ impl HotkeysWindow {
                     }
                     HotkeyAction::ToggleAutoAttack => {
                         self.bot.auto_attack.toggle(self.bot.clone());
+                    }
+                    HotkeyAction::ToggleMaid => {
+                        self.bot.maid.toggle(self.bot.clone());
                     }
                     HotkeyAction::OpenBank => {
                         self.bot.spawn_flash_action("openBank", vec![]);
@@ -209,6 +211,7 @@ impl HotkeysWindow {
                         self.bot.spawn_flash_action("cancelTarget", vec![]);
                     }
                     HotkeyAction::ShowBotManager => effects.toggle_bot_manager = true,
+                    HotkeyAction::ShowMaid => effects.toggle_maid = true,
                     HotkeyAction::ShowTravels => effects.toggle_travels = true,
                     HotkeyAction::ShowLoaders => effects.toggle_loaders = true,
                     HotkeyAction::ShowCosmetics => effects.toggle_cosmetics = true,

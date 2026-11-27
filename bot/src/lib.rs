@@ -7,7 +7,7 @@ pub mod log;
 pub mod network;
 
 // Convenience re-exports for clean crate-root imports
-pub use engine::{auto_attack, gbot, options, runner};
+pub use engine::{auto_attack, gbot, maid, options, runner};
 pub use game::{flash, grabber, host, state};
 pub use network::{capture, handlers, spammer, tamper};
 
@@ -15,9 +15,10 @@ use crate::auto_attack::AutoAttack;
 use crate::capture::CaptureProxy;
 use crate::flash::Flash;
 use crate::gbot::BotConfig;
-use crate::handlers::{AntiCounterHandler, SpecialHandlerManager};
+use crate::handlers::{AntiCounterHandler, MaidPacketRouter, SpecialHandlerManager};
 use crate::host::{FlashArg, FlashHost};
 use crate::log::LogBuffer;
+use crate::maid::MaidEngine;
 use crate::options::{BotOptions, OptionsStore};
 use crate::runner::BotRunner;
 use crate::spammer::PacketSpammer;
@@ -42,6 +43,7 @@ pub struct Bot {
     pub spammer: Arc<PacketSpammer>,
     pub runner: Arc<BotRunner>,
     pub auto_attack: Arc<AutoAttack>,
+    pub maid: Arc<MaidEngine>,
     pub anti_counter: Arc<AntiCounterHandler>,
     pub special_handler: Arc<SpecialHandlerManager>,
     game_loaded: AtomicBool,
@@ -56,6 +58,7 @@ impl Bot {
         let tamper = Arc::new(TamperEngine::default());
         let anti_counter = Arc::new(AntiCounterHandler::new(logs.clone()));
         let special_handler = Arc::new(SpecialHandlerManager::new(logs.clone()));
+        let maid_router = Arc::new(MaidPacketRouter::default());
 
         capture.add_interceptor(Arc::new(StatePacketInterceptor::new(
             state.clone(),
@@ -63,6 +66,7 @@ impl Bot {
         )));
         capture.add_interceptor(anti_counter.clone());
         capture.add_interceptor(special_handler.clone());
+        capture.add_interceptor(maid_router.clone());
         capture.add_interceptor(tamper.clone());
         capture.start();
 
@@ -76,6 +80,7 @@ impl Bot {
             spammer: Arc::new(PacketSpammer::default()),
             runner: Arc::new(BotRunner::default()),
             auto_attack: Arc::new(AutoAttack::default()),
+            maid: Arc::new(MaidEngine::default()),
             anti_counter: anti_counter.clone(),
             special_handler: special_handler.clone(),
             game_loaded: AtomicBool::new(false),
@@ -84,6 +89,7 @@ impl Bot {
 
         let weak_bot = Arc::downgrade(&bot);
         special_handler.attach_bot(weak_bot.clone());
+        maid_router.attach_bot(weak_bot.clone());
         anti_counter.set_on_counter_active(Arc::new(move || {
             if let Some(b) = weak_bot.upgrade() {
                 let enabled = b.auto_attack.is_running()

@@ -2,6 +2,7 @@
 
 pub mod bot_managers;
 pub mod command_editor;
+pub mod maid;
 pub mod theme;
 pub mod tools;
 
@@ -17,6 +18,8 @@ use grimlite_bot::options::BotOptions;
 use std::sync::Arc;
 
 pub const NAV_BAR_HEIGHT: f32 = 34.0;
+const APP_ICON_RGBA: &[u8] = include_bytes!("../assets/grimlite-icon-64.rgba");
+const GITHUB_URL: &str = "https://github.com/Froztt13/Grimlite-Ri";
 
 const PADS: &[&str] = &[
     "Center", "Spawn", "Left", "Right", "Top", "Bottom", "Up", "Down",
@@ -111,6 +114,7 @@ pub struct GrimliteUi {
 
     options: BotOptions,
     theme_applied: bool,
+    app_icon: Option<egui::TextureHandle>,
 
     // Header Cell/Pad quick-jump state (Grimlite-Li style)
     jump_cell: String,
@@ -137,10 +141,20 @@ impl GrimliteUi {
             show_logs: false,
             options,
             theme_applied: false,
+            app_icon: None,
             jump_cell: "Enter".to_string(),
             jump_pad: "Spawn".to_string(),
             last_map_name: String::new(),
         }
+    }
+
+    pub fn with_maid_dialogs(
+        mut self,
+        pick_json: Option<FileDialogFn>,
+        save_json: Option<FileDialogFn>,
+    ) -> Self {
+        self.tools.set_maid_dialogs(pick_json, save_json);
+        self
     }
 
     pub fn show(&mut self, ctx: &Context, egui_ui: &mut Ui) {
@@ -178,13 +192,40 @@ impl GrimliteUi {
                         self.show_options = !self.show_options;
                     }
 
-                    ui.menu_button("Tools", |ui| {
-                        self.tools.menu_items(ui);
+                    ui.scope(|ui| {
+                        let inactive = &mut ui.visuals_mut().widgets.inactive;
+                        inactive.weak_bg_fill = Color32::TRANSPARENT;
+                        inactive.bg_fill = Color32::TRANSPARENT;
+                        inactive.bg_stroke = egui::Stroke::NONE;
+                        ui.menu_button("Tools", |ui| {
+                            self.tools.menu_items(ui);
+                        });
                     });
 
                     if ui.selectable_label(self.show_logs, "Logs").clicked() {
                         self.show_logs = !self.show_logs;
                     }
+
+                    ui.separator();
+
+                    ui.scope(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let mut maid_on = self.bot.maid.is_running();
+                        if ui
+                            .checkbox(&mut maid_on, "")
+                            .on_hover_text("Start / Stop Maid")
+                            .changed()
+                        {
+                            self.bot.maid.toggle(self.bot.clone());
+                        }
+                        if ui
+                            .selectable_label(self.tools.maid.open, "Maid")
+                            .on_hover_text("Open Maid Remake window")
+                            .clicked()
+                        {
+                            self.tools.maid.open = !self.tools.maid.open;
+                        }
+                    });
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let snap = self.bot.player_snapshot();
@@ -212,86 +253,89 @@ impl GrimliteUi {
 
                         ui.separator();
 
-                        // Refresh cells & jump to current cell/pad (`x` button in Grimlite-Li)
-                        if ui
-                            .button("x")
-                            .on_hover_text("Refresh cells & re-sync current cell/pad")
-                            .clicked()
-                        {
-                            self.bot.refresh_map_cells();
-                            if !snap.cell.is_empty() {
-                                self.jump_cell = snap.cell.clone();
-                            }
-                            if !snap.pad.is_empty() {
-                                self.jump_pad = snap.pad.clone();
-                            }
-                            self.bot.spawn_flash_action(
-                                "moveToCell",
-                                vec![
-                                    FlashArg::from(self.jump_cell.as_str()),
-                                    FlashArg::from(self.jump_pad.as_str()),
-                                ],
-                            );
-                        }
+                        // Tightly grouped [Pad] [Cell] [x] jump controls
+                        ui.scope(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
 
-                        // Cell dropdown
-                        let cells = self.bot.state.cell_list();
-                        let mut cell_changed = false;
-                        let cell_resp = theme::dropdown(
-                            ui,
-                            "header_cell_cb",
-                            self.jump_cell.clone(),
-                            82.0,
-                            |ui| {
-                                for c in &cells {
+                            // Refresh cells & jump to current cell/pad (`x` button in Grimlite-Li)
+                            if ui
+                                .button("x")
+                                .on_hover_text("Refresh cells & re-sync current cell/pad")
+                                .clicked()
+                            {
+                                self.bot.refresh_map_cells();
+                                if !snap.cell.is_empty() {
+                                    self.jump_cell = snap.cell.clone();
+                                }
+                                if !snap.pad.is_empty() {
+                                    self.jump_pad = snap.pad.clone();
+                                }
+                                self.bot.spawn_flash_action(
+                                    "moveToCell",
+                                    vec![
+                                        FlashArg::from(self.jump_cell.as_str()),
+                                        FlashArg::from(self.jump_pad.as_str()),
+                                    ],
+                                );
+                            }
+
+                            // Cell dropdown (taller popup height to show more cells at once)
+                            let cells = self.bot.state.cell_list();
+                            let mut cell_changed = false;
+                            let cell_resp = egui::ComboBox::from_id_salt("header_cell_cb")
+                                .selected_text(self.jump_cell.clone())
+                                .width(82.0)
+                                .height(340.0)
+                                .show_ui(ui, |ui| {
+                                    for c in &cells {
+                                        if ui
+                                            .selectable_value(&mut self.jump_cell, c.clone(), c)
+                                            .changed()
+                                        {
+                                            cell_changed = true;
+                                        }
+                                    }
+                                });
+                            if cell_resp.response.clicked() {
+                                self.bot.refresh_map_cells();
+                            }
+                            if cell_changed {
+                                self.bot.spawn_flash_action(
+                                    "moveToCell",
+                                    vec![
+                                        FlashArg::from(self.jump_cell.as_str()),
+                                        FlashArg::from(self.jump_pad.as_str()),
+                                    ],
+                                );
+                            }
+
+                            // Pad dropdown
+                            let mut pad_changed = false;
+                            theme::dropdown(ui, "header_pad_cb", self.jump_pad.clone(), 74.0, |ui| {
+                                for &p in PADS {
                                     if ui
-                                        .selectable_value(&mut self.jump_cell, c.clone(), c)
+                                        .selectable_value(&mut self.jump_pad, p.to_string(), p)
                                         .changed()
                                     {
-                                        cell_changed = true;
+                                        pad_changed = true;
                                     }
                                 }
-                            },
-                        );
-                        if cell_resp.response.clicked() {
-                            self.bot.refresh_map_cells();
-                        }
-                        if cell_changed {
-                            self.bot.spawn_flash_action(
-                                "moveToCell",
-                                vec![
-                                    FlashArg::from(self.jump_cell.as_str()),
-                                    FlashArg::from(self.jump_pad.as_str()),
-                                ],
-                            );
-                        }
-
-                        // Pad dropdown
-                        let mut pad_changed = false;
-                        theme::dropdown(ui, "header_pad_cb", self.jump_pad.clone(), 74.0, |ui| {
-                            for &p in PADS {
-                                if ui
-                                    .selectable_value(&mut self.jump_pad, p.to_string(), p)
-                                    .changed()
-                                {
-                                    pad_changed = true;
-                                }
+                            });
+                            if pad_changed {
+                                let target_cell = if self.jump_cell.is_empty() {
+                                    snap.cell.as_str()
+                                } else {
+                                    self.jump_cell.as_str()
+                                };
+                                self.bot.spawn_flash_action(
+                                    "moveToCell",
+                                    vec![
+                                        FlashArg::from(target_cell),
+                                        FlashArg::from(self.jump_pad.as_str()),
+                                    ],
+                                );
                             }
                         });
-                        if pad_changed {
-                            let target_cell = if self.jump_cell.is_empty() {
-                                snap.cell.as_str()
-                            } else {
-                                self.jump_cell.as_str()
-                            };
-                            self.bot.spawn_flash_action(
-                                "moveToCell",
-                                vec![
-                                    FlashArg::from(target_cell),
-                                    FlashArg::from(self.jump_pad.as_str()),
-                                ],
-                            );
-                        }
 
                         ui.separator();
 
@@ -355,15 +399,26 @@ impl GrimliteUi {
     }
 
     fn show_about_window(&mut self, ctx: &Context) {
+        let icon_tex = self
+            .app_icon
+            .get_or_insert_with(|| {
+                let image = egui::ColorImage::from_rgba_unmultiplied([64, 64], APP_ICON_RGBA);
+                ctx.load_texture("grimlite_app_icon", image, egui::TextureOptions::LINEAR)
+            })
+            .clone();
+
         let mut open = self.show_about;
-        show_detached_window(
+        show_detached_window_sized(
             ctx,
             "grimlite_about",
             "About Grimlite Ri",
-            [400.0, 260.0],
+            [400.0, 335.0],
+            Some([360.0, 315.0]),
             &mut open,
             |ui| {
                 ui.vertical_centered(|ui| {
+                    ui.add_space(4.0);
+                    ui.image((icon_tex.id(), egui::vec2(52.0, 52.0)));
                     ui.add_space(4.0);
                     ui.label(
                         RichText::new("Grimlite Ri")
@@ -410,6 +465,10 @@ impl GrimliteUi {
                         ui.label(RichText::new("Modes").weak());
                         ui.label("Desktop (GPU) & Headless (2 FPS)");
                         ui.end_row();
+
+                        ui.label(RichText::new("GitHub").weak());
+                        ui.hyperlink_to("github.com/Froztt13/Grimlite-Ri", GITHUB_URL);
+                        ui.end_row();
                     });
             },
         );
@@ -423,8 +482,8 @@ impl GrimliteUi {
             ctx,
             "grimlite_options",
             "Game Options",
-            [295.0, 215.0],
-            Some([275.0, 200.0]),
+            [310.0, 260.0],
+            Some([290.0, 245.0]),
             &mut open,
             |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);

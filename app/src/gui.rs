@@ -98,6 +98,19 @@ impl RuffleGui {
                         .set_file_name("bot.gbot")
                         .save_file()
                 })),
+            )
+            .with_maid_dialogs(
+                Some(Box::new(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Maid Config", &["json"])
+                        .pick_file()
+                })),
+                Some(Box::new(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Maid Config", &["json"])
+                        .set_file_name("maid.json")
+                        .save_file()
+                })),
             ),
         }
     }
