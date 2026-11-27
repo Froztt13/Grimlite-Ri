@@ -9,6 +9,7 @@ const MAX_LINES: usize = 500;
 #[derive(Default)]
 pub struct LogBuffer {
     debug: Mutex<VecDeque<String>>,
+    script: Mutex<VecDeque<String>>,
 }
 
 impl LogBuffer {
@@ -21,11 +22,28 @@ impl LogBuffer {
         buf.push_back(line);
     }
 
+    pub fn push_script(&self, message: impl AsRef<str>) {
+        let line = format!("[{}] {}", Local::now().format("%H:%M:%S"), message.as_ref());
+        let mut buf = self.script.lock();
+        if buf.len() >= MAX_LINES {
+            buf.pop_front();
+        }
+        buf.push_back(line);
+    }
+
     pub fn debug_lines(&self) -> Vec<String> {
         self.debug.lock().iter().cloned().collect()
     }
 
+    pub fn script_lines(&self) -> Vec<String> {
+        self.script.lock().iter().cloned().collect()
+    }
+
     pub fn clear_debug(&self) {
         self.debug.lock().clear();
+    }
+
+    pub fn clear_script(&self) {
+        self.script.lock().clear();
     }
 }

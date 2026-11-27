@@ -1,8 +1,13 @@
 //! Grimlite Ri core bot engine (no Ruffle or UI dependencies).
 
+pub mod auto_attack;
 pub mod capture;
+pub mod commands;
+pub mod dps;
 pub mod flash;
 pub mod gbot;
+pub mod grabber;
+pub mod handlers;
 pub mod host;
 pub mod log;
 pub mod options;
@@ -11,9 +16,12 @@ pub mod spammer;
 pub mod state;
 pub mod tamper;
 
+use crate::auto_attack::AutoAttack;
 use crate::capture::CaptureProxy;
+use crate::dps::{DpsMeter, DpsPacketInterceptor};
 use crate::flash::Flash;
 use crate::gbot::BotConfig;
+use crate::handlers::{AntiCounterHandler, SpecialHandlerManager};
 use crate::host::{FlashArg, FlashHost};
 use crate::log::LogBuffer;
 use crate::options::{BotOptions, OptionsStore};
@@ -39,6 +47,10 @@ pub struct Bot {
     pub tamper: Arc<TamperEngine>,
     pub spammer: Arc<PacketSpammer>,
     pub runner: Arc<BotRunner>,
+    pub auto_attack: Arc<AutoAttack>,
+    pub anti_counter: Arc<AntiCounterHandler>,
+    pub special_handler: Arc<SpecialHandlerManager>,
+    pub dps: Arc<DpsMeter>,
     game_loaded: AtomicBool,
     worker_started: AtomicBool,
 }
@@ -49,15 +61,21 @@ impl Bot {
         let logs = Arc::new(LogBuffer::default());
         let state = Arc::new(GameState::default());
         let tamper = Arc::new(TamperEngine::default());
+        let dps = Arc::new(DpsMeter::default());
+        let anti_counter = Arc::new(AntiCounterHandler::new(logs.clone()));
+        let special_handler = Arc::new(SpecialHandlerManager::new(logs.clone()));
 
         capture.add_interceptor(Arc::new(StatePacketInterceptor::new(
             state.clone(),
             logs.clone(),
         )));
+        capture.add_interceptor(Arc::new(DpsPacketInterceptor::new(dps.clone())));
+        capture.add_interceptor(anti_counter.clone());
+        capture.add_interceptor(special_handler.clone());
         capture.add_interceptor(tamper.clone());
         capture.start();
 
-        Arc::new(Self {
+        let bot = Arc::new(Self {
             host: RwLock::new(None),
             capture,
             logs,
@@ -66,9 +84,58 @@ impl Bot {
             tamper,
             spammer: Arc::new(PacketSpammer::default()),
             runner: Arc::new(BotRunner::default()),
+            auto_attack: Arc::new(AutoAttack::default()),
+            anti_counter: anti_counter.clone(),
+            special_handler: special_handler.clone(),
+            dps,
             game_loaded: AtomicBool::new(false),
             worker_started: AtomicBool::new(false),
-        })
+        });
+
+        let weak_bot = Arc::downgrade(&bot);
+        special_handler.attach_bot(weak_bot.clone());
+        anti_counter.set_on_counter_active(Arc::new(move || {
+            if let Some(b) = weak_bot.upgrade() {
+                let enabled = b.auto_attack.is_running()
+                    || b.options.get().anti_counter
+                    || (b.runner.is_running() && b.runner.config().anti_counter);
+                if enabled {
+                    b.spawn_flash_action("cancelTarget", vec![]);
+                }
+            }
+        }));
+
+        bot
+    }
+
+    /// Runs a one-off Flash call on a background thread so the UI thread never blocks.
+    pub fn spawn_flash_action(self: &Arc<Self>, name: &'static str, args: Vec<FlashArg>) {
+        let bot = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name("grimlite-action".into())
+            .spawn(move || {
+                if let Some(flash) = bot.flash() {
+                    if let Err(e) = flash.call_str(name, &args) {
+                        bot.logs.push_debug(format!("[Action {name}] {e}"));
+                    }
+                }
+            });
+    }
+
+    /// Queries the current map's frame labels from Flash (`getCells`) and stores them in `GameState`.
+    pub fn refresh_map_cells(self: &Arc<Self>) {
+        let bot = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name("grimlite-cells".into())
+            .spawn(move || {
+                if let Some(flash) = bot.flash()
+                    && let Ok(raw) = flash.call_str("getCells", &[])
+                    && let Ok(parsed) = serde_json::from_str::<Vec<String>>(&raw)
+                    && !parsed.is_empty()
+                {
+                    *bot.state.map_cells.write() = parsed;
+                }
+            });
     }
 
     pub fn load_gbot_file(&self, path: &std::path::Path) -> Result<(), String> {
@@ -88,12 +155,34 @@ impl Bot {
         Ok(())
     }
 
+    pub fn save_gbot_file(&self, path: &std::path::Path) -> Result<(), String> {
+        let cfg = self.runner.config();
+        let json = cfg
+            .to_gbot_json()
+            .map_err(|e| format!("serialize error: {e}"))?;
+        std::fs::write(path, json).map_err(|e| format!("write error: {e}"))?;
+        let name = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("bot.gbot")
+            .to_string();
+        self.logs.push_debug(format!("[Bot] Saved `{name}`"));
+        Ok(())
+    }
+
     pub fn start_bot(self: &Arc<Self>) {
+        if !self.is_logged_in() {
+            return;
+        }
         self.runner.start(Arc::clone(self));
     }
 
     pub fn stop_bot(&self) {
         self.runner.stop();
+    }
+
+    pub fn is_logged_in(&self) -> bool {
+        self.state.snapshot().logged_in
     }
 
     pub fn set_host(self: &Arc<Self>, host: Arc<dyn FlashHost>) {
@@ -175,7 +264,18 @@ impl Bot {
 
                     // Poll batched player state
                     if let Ok(snap) = flash.call_json::<PlayerSnapshot>("getPlayerState", &[]) {
+                        let logged_in = snap.logged_in;
                         bot.state.update_player(snap);
+                        if !logged_in {
+                            if bot.auto_attack.is_running() {
+                                bot.auto_attack.stop(Arc::clone(&bot));
+                            }
+                            if bot.runner.is_running() && !bot.runner.config().auto_relogin {
+                                bot.logs
+                                    .push_debug("[Bot] Stopped (logged out, auto-relogin disabled)");
+                                bot.stop_bot();
+                            }
+                        }
                     }
 
                     // Enforce changed options
@@ -199,10 +299,22 @@ impl Bot {
                             "setSkipCutscenes",
                             &[FlashArg::Bool(desired.skip_cutscenes)],
                         );
-                        let _ =
-                            flash.call_bool("setWalkSpeed", &[FlashArg::from(desired.walk_speed)]);
+                        let effective_speed = if desired.walk_speed_enabled {
+                            desired.walk_speed.clamp(1, 99)
+                        } else {
+                            8
+                        };
+                        let _ = flash.call_bool("setWalkSpeed", &[FlashArg::from(effective_speed)]);
                         let _ = flash.call_bool("setFPS", &[FlashArg::from(desired.fps)]);
                         applied = Some(desired.clone());
+                    }
+
+                    // Periodic walk speed enforcement while enabled (matches Grimlite-Li chkWalkSpeed)
+                    if desired.walk_speed_enabled && bot.state.snapshot().logged_in {
+                        let _ = flash.call_bool(
+                            "setWalkSpeed",
+                            &[FlashArg::from(desired.walk_speed.clamp(1, 99))],
+                        );
                     }
 
                     // Periodic provoke monsters (every ~1s while logged in)
@@ -211,6 +323,33 @@ impl Bot {
                         && bot.state.snapshot().logged_in
                     {
                         let _ = flash.call_bool("aggroMonsters", &[]);
+                    }
+
+                    // Periodic Follow Player check (every ~2s while logged in, mirrors BotManager.cs setFollowHandler)
+                    if desired.follow_enabled
+                        && tick.is_multiple_of(4)
+                        && bot.state.snapshot().logged_in
+                    {
+                        let target = desired.follow_player.trim().to_ascii_lowercase();
+                        if !target.is_empty() && target != "player name" {
+                            let in_map = flash
+                                .call_str("PlayersInMap", &[])
+                                .ok()
+                                .and_then(|raw| serde_json::from_str::<Vec<String>>(&raw).ok())
+                                .map(|list| {
+                                    list.iter().any(|p| p.trim().eq_ignore_ascii_case(&target))
+                                })
+                                .unwrap_or(true);
+                            if !in_map {
+                                let _ = flash.call_bool("cancelTarget", &[]);
+                                let _ = flash.call_bool(
+                                    "moveToCell",
+                                    &[FlashArg::from("Blank"), FlashArg::from("Spawn")],
+                                );
+                                std::thread::sleep(Duration::from_millis(600));
+                                let _ = flash.call_str("GoTo", &[FlashArg::from(target.as_str())]);
+                            }
+                        }
                     }
                 }
             });

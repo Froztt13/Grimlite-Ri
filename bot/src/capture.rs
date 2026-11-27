@@ -48,12 +48,21 @@ pub trait Interceptor: Send + Sync {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InterceptedPacket {
+    pub timestamp: String,
     pub packet: String,
     /// `Some(true)` = OUT (client -> server), `Some(false)` = IN (server -> client), `None` = BLOCKED.
     pub outbound: Option<bool>,
 }
 
 impl InterceptedPacket {
+    pub fn new(packet: String, outbound: Option<bool>) -> Self {
+        Self {
+            timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+            packet,
+            outbound,
+        }
+    }
+
     pub fn direction(&self) -> &'static str {
         match self.outbound {
             Some(true) => "OUT",
@@ -139,10 +148,7 @@ impl CaptureProxy {
         }
         sink.send_to_server(bytes)?;
         if self.is_logging() {
-            self.log_packet(InterceptedPacket {
-                packet: trimmed.to_string(),
-                outbound: Some(true),
-            });
+            self.log_packet(InterceptedPacket::new(trimmed.to_string(), Some(true)));
         }
         Ok(())
     }
@@ -164,10 +170,7 @@ impl CaptureProxy {
         }
         sink.send_to_client(bytes)?;
         if self.is_logging() {
-            self.log_packet(InterceptedPacket {
-                packet: trimmed.to_string(),
-                outbound: Some(false),
-            });
+            self.log_packet(InterceptedPacket::new(trimmed.to_string(), Some(false)));
         }
         Ok(())
     }
@@ -221,10 +224,10 @@ impl CaptureProxy {
         }
 
         if logging {
-            self.log_packet(InterceptedPacket {
-                packet: message.content.clone(),
-                outbound: message.send.then_some(outbound),
-            });
+            self.log_packet(InterceptedPacket::new(
+                message.content.clone(),
+                message.send.then_some(outbound),
+            ));
         }
 
         if !message.send {
@@ -274,21 +277,57 @@ impl Stream {
     }
 }
 
-fn unpack(raw: &str) -> Option<String> {
-    let bytes = raw.as_bytes();
-    if bytes.first().copied() != Some(0x78) {
+const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Decompresses AQW's compressed server packets: `'Z'` followed by Base64-encoded zlib data.
+pub fn unpack(raw: &str) -> Option<String> {
+    let body = raw.strip_prefix('Z')?;
+    let body = body.trim_end_matches('=');
+    if body.len() * 3 / 4 < 8 || body.chars().any(|c| c as u32 > 255) {
         return None;
     }
-    let decoder = ZlibDecoder::new(bytes);
-    let mut out = String::new();
-    decoder.take(MAX_INFLATED).read_to_string(&mut out).ok()?;
-    Some(out)
+    let mut bytes = Vec::with_capacity(body.len() * 3 / 4);
+    let (mut bits, mut count) = (0u32, 0u32);
+    for b in body.bytes() {
+        let value = BASE64.iter().position(|&c| c == b).unwrap_or(0) as u32;
+        bits = (bits << 6) | value;
+        count += 6;
+        if count >= 8 {
+            count -= 8;
+            bytes.push((bits >> count) as u8);
+        }
+    }
+    let mut inflated = Vec::new();
+    ZlibDecoder::new(&bytes[..])
+        .take(MAX_INFLATED + 1)
+        .read_to_end(&mut inflated)
+        .ok()?;
+    if inflated.len() as u64 > MAX_INFLATED {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&inflated).into_owned())
 }
 
-fn pack(text: &str) -> Vec<u8> {
+/// Re-compresses an edited server packet back into AQW's `'Z'` + Base64(zlib) wire format.
+pub fn pack(text: &str) -> Vec<u8> {
     let mut encoder = ZlibEncoder::new(Vec::new(), Compression::default());
     let _ = encoder.write_all(text.as_bytes());
-    encoder.finish().unwrap_or_else(|_| text.as_bytes().to_vec())
+    let data = encoder.finish().unwrap_or_default();
+    let mut out = Vec::with_capacity(1 + data.len().div_ceil(3) * 4);
+    out.push(b'Z');
+    for chunk in data.chunks(3) {
+        let n = ((chunk[0] as u32) << 16)
+            | ((*chunk.get(1).unwrap_or(&0) as u32) << 8)
+            | (*chunk.get(2).unwrap_or(&0) as u32);
+        for i in 0..4 {
+            if i <= chunk.len() {
+                out.push(BASE64[((n >> (18 - 6 * i)) as usize) & 63]);
+            } else {
+                out.push(b'=');
+            }
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -317,5 +356,15 @@ mod tests {
         assert_eq!(logged.len(), 2);
         assert_eq!(logged[0].direction(), "OUT");
         assert_eq!(logged[1].direction(), "BLOCK");
+    }
+
+    #[test]
+    fn unpacks_and_packs_aqw_z_base64_zlib_packets() {
+        let sample = r#"{"t":"xt","b":{"r":-1,"o":{"cmd":"moveToArea","areaId":121135,"strMapName":"battleon"}}}"#;
+        let packed = pack(sample);
+        let packed_str = String::from_utf8(packed).unwrap();
+        assert!(packed_str.starts_with('Z'));
+        let unpacked = unpack(&packed_str).expect("should unpack Z+base64+zlib");
+        assert_eq!(unpacked, sample);
     }
 }
