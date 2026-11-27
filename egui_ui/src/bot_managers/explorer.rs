@@ -219,6 +219,16 @@ impl BotManagerWindow {
                                     ui.label(RichText::new("  (empty)").small().weak());
                                     return;
                                 }
+                                let cmds_locked = running && self.list_kind == ListKind::Commands;
+                                if cmds_locked {
+                                    self.selected.clear();
+                                    self.anchor = None;
+                                } else {
+                                    self.last_scrolled_idx = None;
+                                }
+                                let should_scroll_to_active = cmds_locked
+                                    && self.last_scrolled_idx != Some(active_idx);
+
                                 let q = self.search_text.trim().to_lowercase();
                                 let mut shown = 0;
                                 for i in 0..len {
@@ -227,10 +237,8 @@ impl BotManagerWindow {
                                         continue;
                                     }
                                     shown += 1;
-                                    let is_selected = self.selected.contains(&i);
-                                    let is_cur = self.list_kind == ListKind::Commands
-                                        && running
-                                        && i == active_idx;
+                                    let is_selected = !cmds_locked && self.selected.contains(&i);
+                                    let is_cur = cmds_locked && i == active_idx;
 
                                     let row_fill = if is_selected {
                                         Color32::from_rgb(16, 82, 118)
@@ -272,7 +280,7 @@ impl BotManagerWindow {
                                         egui::TextFormat::simple(mono, text_color),
                                     );
 
-                                    let resp = egui::Frame::new()
+                                    let mut resp = egui::Frame::new()
                                         .fill(row_fill)
                                         .corner_radius(3.0)
                                         .inner_margin(egui::Margin::symmetric(6, 4))
@@ -282,11 +290,22 @@ impl BotManagerWindow {
                                                 egui::Label::new(job).truncate().selectable(false),
                                             )
                                         })
-                                        .response
-                                        .interact(egui::Sense::click())
-                                        .on_hover_text(&label);
+                                        .response;
 
-                                    if resp.double_clicked() {
+                                    if is_cur && should_scroll_to_active {
+                                        resp.scroll_to_me(Some(egui::Align::Center));
+                                        self.last_scrolled_idx = Some(active_idx);
+                                    }
+
+                                    if cmds_locked {
+                                        resp = resp.on_hover_text(&label);
+                                    } else {
+                                        resp = resp
+                                            .interact(egui::Sense::click())
+                                            .on_hover_text(&label);
+                                    }
+
+                                    if !cmds_locked && resp.double_clicked() {
                                         match self.list_kind {
                                             ListKind::Commands => {
                                                 self.command_editor
@@ -305,7 +324,7 @@ impl BotManagerWindow {
                                                     .open_drop(i, cfg.drops[i].clone());
                                             }
                                         }
-                                    } else if resp.clicked() {
+                                    } else if !cmds_locked && resp.clicked() {
                                         // Release focus from any TextEdit so Cmd/Ctrl+C/V/Up/Down work immediately
                                         if let Some(focused) = ui.ctx().memory(|m| m.focused()) {
                                             ui.ctx().memory_mut(|m| m.surrender_focus(focused));

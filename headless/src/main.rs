@@ -1200,13 +1200,12 @@ impl eframe::App for HeadlessApp {
                                                     } else {
                                                         Color32::from_rgb(45, 115, 215)
                                                     };
-                                                    ui.add(
-                                                        egui::ProgressBar::new(frac)
-                                                            .fill(bar_color)
-                                                            .text(format!(
-                                                                "{}  {} / {}",
-                                                                req.name, have, req.required
-                                                            )),
+                                                    grimlite_egui::theme::stat_bar(
+                                                        ui,
+                                                        &req.name,
+                                                        &format!("{have} / {}", req.required),
+                                                        frac,
+                                                        bar_color,
                                                     );
                                                     ui.add_space(2.0);
                                                 }
@@ -1478,63 +1477,12 @@ fn render_telemetry_card(
     running: bool,
     ready: bool,
 ) {
-    ui.heading("Player Telemetry");
-    egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            let uname = if snap.username.is_empty() {
-                sess.user.as_str()
-            } else {
-                snap.username.as_str()
-            };
-            ui.label(RichText::new(uname).strong());
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.label(
-                    RichText::new(format!("Lv. {}", snap.level))
-                        .color(Color32::from_rgb(255, 210, 90)),
-                );
-            });
-        });
-
-        ui.add_space(4.0);
-        let hp_frac = if snap.max_hp > 0 {
-            (snap.hp as f32 / snap.max_hp as f32).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        ui.add(
-            egui::ProgressBar::new(hp_frac)
-                .fill(Color32::from_rgb(200, 45, 55))
-                .text(format!("HP  {} / {}", snap.hp, snap.max_hp)),
-        );
-
-        ui.add_space(3.0);
-        let mp_frac = if snap.max_mp > 0 {
-            (snap.mp as f32 / snap.max_mp as f32).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-        ui.add(
-            egui::ProgressBar::new(mp_frac)
-                .fill(Color32::from_rgb(45, 115, 215))
-                .text(format!("MP  {} / {}", snap.mp, snap.max_mp)),
-        );
-
-        if !snap.target_name.is_empty() {
-            ui.add_space(5.0);
-            let t_frac = if snap.target_max_hp > 0 {
-                (snap.target_hp as f32 / snap.target_max_hp as f32).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            ui.add(
-                egui::ProgressBar::new(t_frac)
-                    .fill(Color32::from_rgb(215, 130, 40))
-                    .text(format!(
-                        "{}  {}/{}",
-                        snap.target_name, snap.target_hp, snap.target_max_hp
-                    )),
-            );
+    grimlite_egui::theme::card(ui, "Player Telemetry", |ui| {
+        let mut display_snap = snap.clone();
+        if display_snap.username.is_empty() {
+            display_snap.username = sess.user.clone();
         }
+        grimlite_egui::theme::player_telemetry(ui, &display_snap);
 
         ui.add_space(6.0);
         egui::Grid::new(format!("telemetry_grid_{id}"))
@@ -1582,12 +1530,6 @@ fn render_telemetry_card(
                     RichText::new(format!("{}", snap.gold))
                         .monospace()
                         .color(Color32::from_rgb(255, 210, 90)),
-                );
-                ui.end_row();
-
-                ui.label(RichText::new("DPS").weak());
-                ui.label(
-                    RichText::new(format!("{:.1}", sess.bot.dps.snapshot().dps)).monospace(),
                 );
                 ui.end_row();
             });

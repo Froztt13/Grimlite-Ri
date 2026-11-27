@@ -414,6 +414,146 @@ pub fn list_text_row(
     .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Reusable high-contrast stat bar (HP, MP, Target, Quest progress) with crisp white text
+/// and subtle dark shadow so labels stay 100% legible over any bar color.
+pub fn stat_bar(ui: &mut Ui, label: &str, value: &str, fraction: f32, fill: Color32) {
+    let frac = fraction.clamp(0.0, 1.0);
+    let desired = egui::vec2(ui.available_width().max(80.0), 19.0);
+    let (rect, _) = ui.allocate_exact_size(desired, egui::Sense::hover());
+
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+
+    let painter = ui.painter();
+    let radius = CornerRadius::same(4);
+
+    // Sunken dark track
+    painter.rect(
+        rect,
+        radius,
+        Palette::BG_INPUT,
+        Stroke::new(1.0, Palette::BORDER_SUBTLE),
+        egui::StrokeKind::Inside,
+    );
+
+    // Filled portion
+    if frac > 0.0 {
+        let fill_w = (rect.width() * frac).max(6.0).min(rect.width());
+        let fill_rect = egui::Rect::from_min_size(rect.min, egui::vec2(fill_w, rect.height()));
+        painter.rect_filled(fill_rect.shrink(1.0), CornerRadius::same(3), fill);
+    }
+
+    let font = egui::FontId::proportional(11.5);
+    let shadow = Color32::from_rgba_unmultiplied(0, 0, 0, 180);
+    let pad_x = 7.0;
+
+    // Left-aligned label with subtle shadow
+    let left_pos = egui::pos2(rect.left() + pad_x, rect.center().y);
+    painter.text(
+        left_pos + egui::vec2(0.0, 1.0),
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        shadow,
+    );
+    painter.text(
+        left_pos,
+        egui::Align2::LEFT_CENTER,
+        label,
+        font.clone(),
+        Color32::WHITE,
+    );
+
+    // Right-aligned value readout with subtle shadow
+    if !value.is_empty() {
+        let right_pos = egui::pos2(rect.right() - pad_x, rect.center().y);
+        painter.text(
+            right_pos + egui::vec2(0.0, 1.0),
+            egui::Align2::RIGHT_CENTER,
+            value,
+            font.clone(),
+            shadow,
+        );
+        painter.text(
+            right_pos,
+            egui::Align2::RIGHT_CENTER,
+            value,
+            font,
+            Color32::WHITE,
+        );
+    }
+}
+
+/// Reusable Player & Target stats telemetry block (name, level, HP, MP, and active target).
+pub fn player_telemetry(ui: &mut Ui, snap: &grimlite_bot::state::PlayerSnapshot) {
+    ui.horizontal(|ui| {
+        let name = if snap.username.is_empty() {
+            "—"
+        } else {
+            snap.username.as_str()
+        };
+        ui.label(
+            RichText::new(name)
+                .strong()
+                .size(13.0)
+                .color(Color32::WHITE),
+        );
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(
+                RichText::new(format!("Lv. {}", snap.level))
+                    .strong()
+                    .size(12.0)
+                    .color(Palette::WARNING),
+            );
+        });
+    });
+
+    ui.add_space(4.0);
+    let hp_frac = if snap.max_hp > 0 {
+        snap.hp as f32 / snap.max_hp as f32
+    } else {
+        0.0
+    };
+    stat_bar(
+        ui,
+        "HP",
+        &format!("{} / {}", snap.hp, snap.max_hp),
+        hp_frac,
+        Color32::from_rgb(196, 46, 58),
+    );
+
+    ui.add_space(3.0);
+    let mp_frac = if snap.max_mp > 0 {
+        snap.mp as f32 / snap.max_mp as f32
+    } else {
+        0.0
+    };
+    stat_bar(
+        ui,
+        "MP",
+        &format!("{} / {}", snap.mp, snap.max_mp),
+        mp_frac,
+        Color32::from_rgb(38, 108, 206),
+    );
+
+    if !snap.target_name.is_empty() {
+        ui.add_space(4.0);
+        let t_frac = if snap.target_max_hp > 0 {
+            snap.target_hp as f32 / snap.target_max_hp as f32
+        } else {
+            0.0
+        };
+        stat_bar(
+            ui,
+            &snap.target_name,
+            &format!("{} / {}", snap.target_hp, snap.target_max_hp),
+            t_frac,
+            Color32::from_rgb(208, 122, 34),
+        );
+    }
+}
+
 /// Reusable ON/OFF toggle button with crisp green active state.
 pub fn toggle_button(
     ui: &mut Ui,
