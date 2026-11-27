@@ -350,25 +350,40 @@ public class Main extends MovieClip {
             if (game != null && game.sfc != null && game.sfc.isConnected && game.world != null && game.world.myAvatar != null) {
                 var av:* = game.world.myAvatar;
                 var data:* = av.objData;
+                var leaf:* = av.dataLeaf;
                 out.loggedIn = true;
                 if (data != null) {
                     out.username = String(data.strUsername || "");
+                    out.level = int(data.intLevel);
+                    out.gold = int(data.intGold);
+                }
+                if (leaf != null) {
+                    out.hp = int(leaf.intHP);
+                    out.maxHp = int(leaf.intHPMax);
+                    out.mp = int(leaf.intMP);
+                    out.maxMp = int(leaf.intMPMax);
+                    out.state = int(leaf.intState);
+                    out.alive = int(leaf.intHP) > 0 && int(leaf.intState) > 0;
+                } else if (data != null) {
                     out.hp = int(data.intHP);
                     out.maxHp = int(data.intHPMax);
                     out.mp = int(data.intMP);
                     out.maxMp = int(data.intMPMax);
-                    out.level = int(data.intLevel);
-                    out.gold = int(data.intGold);
                     out.state = int(data.intState);
-                    out.alive = int(data.intHP) > 0 && int(data.intState) > 0;
+                    out.alive = out.maxHp == 0 || (out.hp > 0 && out.state > 0);
                 }
                 out.map = String(game.world.strMapName || "");
                 out.cell = String(game.world.strFrame || "");
                 out.pad = String(game.world.strPad || "");
-                if (av.target != null && av.target.objData != null) {
-                    out.targetName = String(av.target.objData.strMonName || av.target.objData.strUsername || "");
-                    out.targetHp = int(av.target.objData.intHP);
-                    out.targetMaxHp = int(av.target.objData.intHPMax);
+                if (av.target != null) {
+                    if (av.target.objData != null) {
+                        out.targetName = String(av.target.objData.strMonName || av.target.objData.strUsername || "");
+                    }
+                    var tLeaf:* = av.target.dataLeaf != null ? av.target.dataLeaf : av.target.objData;
+                    if (tLeaf != null) {
+                        out.targetHp = int(tLeaf.intHP);
+                        out.targetMaxHp = int(tLeaf.intHPMax);
+                    }
                 }
             }
         } catch (e:Error) {}
