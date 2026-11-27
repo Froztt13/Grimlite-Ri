@@ -101,6 +101,7 @@ public class Main extends MovieClip {
         expose("aggroMonsters", aggroMonsters);
         expose("setEnemyMagnet", setEnemyMagnet);
         expose("setLagKiller", setLagKiller);
+        expose("setLagKillerImage", setLagKillerImage);
         expose("setDisableAnimations", setDisableAnimations);
         expose("setSkipCutscenes", setSkipCutscenes);
         expose("setFPS", setFPS);
@@ -409,6 +410,11 @@ public class Main extends MovieClip {
 
     private function setLagKiller(on:* = true):String {
         Settings.SetLagKiller((on == true || on == "true") ? "True" : "False");
+        return "true";
+    }
+
+    private function setLagKillerImage(base64Data:String = ""):String {
+        Settings.SetLagKillerImage(base64Data);
         return "true";
     }
 

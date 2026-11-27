@@ -9,10 +9,7 @@ pub mod tools;
 
 use crate::bot_managers::{BotManagerWindow, FileDialogFn};
 use crate::tools::ToolsWindows;
-use egui::{
-    CentralPanel, Color32, Context, Panel, RichText, ScrollArea, Slider, Ui, ViewportBuilder,
-    ViewportClass, ViewportId,
-};
+use egui::{Color32, Context, Panel, RichText, ScrollArea, Slider, Ui};
 use grimlite_bot::Bot;
 use grimlite_bot::host::FlashArg;
 use grimlite_bot::options::BotOptions;
@@ -155,9 +152,7 @@ const PADS: &[&str] = &[
     "Center", "Spawn", "Left", "Right", "Top", "Bottom", "Up", "Down",
 ];
 
-/// Shows a tool window as a native OS viewport on desktop (macOS/Windows/Linux) so it can be
-/// dragged freely outside the main Grimlite window. Automatically falls back to an embedded
-/// in-canvas window on Android or backends without multi-viewport support.
+/// Shows a Grimlite tool window as an in-canvas `egui::Window` inside the main application window.
 pub fn show_detached_window(
     ctx: &Context,
     id: &str,
@@ -182,60 +177,16 @@ pub fn show_detached_window_sized(
     if !*open {
         return;
     }
-    let viewport_id = ViewportId::from_hash_of(id);
-    let icon = Arc::new(egui::IconData {
-        rgba: APP_ICON_RGBA.to_vec(),
-        width: 64,
-        height: 64,
-    });
-    let mut builder = ViewportBuilder::default()
-        .with_title(title)
-        .with_inner_size(default_size)
-        .with_resizable(true)
-        .with_always_on_top()
-        .with_icon(icon);
+    let mut win = egui::Window::new(title)
+        .id(egui::Id::new(id))
+        .open(open)
+        .default_size(default_size)
+        .resizable(true)
+        .collapsible(true);
     if let Some(min) = min_size {
-        builder = builder.with_min_inner_size(min);
+        win = win.min_size(min);
     }
-    ctx.show_viewport_immediate(viewport_id, builder, |ui, class| {
-        if class == ViewportClass::EmbeddedWindow {
-            add_contents(ui);
-        } else {
-            CentralPanel::default().show(ui, |ui| add_contents(ui));
-        }
-
-        // Forward non-repeat key presses from focused child viewports so global hotkeys
-        // (e.g. pressing F5 twice to open then close a window) work seamlessly across windows.
-        if !ui.ctx().egui_wants_keyboard_input() {
-            let pressed: Vec<egui::Key> = ui.input(|i| {
-                i.events
-                    .iter()
-                    .filter_map(|e| match e {
-                        egui::Event::Key {
-                            key,
-                            pressed: true,
-                            repeat: false,
-                            ..
-                        } => Some(*key),
-                        _ => None,
-                    })
-                    .collect()
-            });
-            if !pressed.is_empty() {
-                ui.ctx().data_mut(|d| {
-                    let buf = d.get_temp_mut_or_default::<Vec<egui::Key>>(
-                        egui::Id::new("grimlite_child_pressed_keys"),
-                    );
-                    buf.extend(pressed);
-                });
-                ui.ctx().request_repaint();
-            }
-        }
-
-        if ui.input(|i| i.viewport().close_requested()) {
-            *open = false;
-        }
-    });
+    win.show(ctx, |ui| add_contents(ui));
 }
 
 pub struct GrimliteUi {
@@ -252,6 +203,7 @@ pub struct GrimliteUi {
     theme_applied: bool,
     app_icon: Option<egui::TextureHandle>,
     resources: system::ResourceMonitor,
+    pick_image: Option<FileDialogFn>,
 
     // Header Cell/Pad quick-jump state (Grimlite-Li style)
     jump_cell: String,
@@ -280,6 +232,7 @@ impl GrimliteUi {
             theme_applied: false,
             app_icon: None,
             resources: system::ResourceMonitor::default(),
+            pick_image: None,
             jump_cell: "Enter".to_string(),
             jump_pad: "Spawn".to_string(),
             last_map_name: String::new(),
@@ -292,6 +245,11 @@ impl GrimliteUi {
         save_json: Option<FileDialogFn>,
     ) -> Self {
         self.tools.set_maid_dialogs(pick_json, save_json);
+        self
+    }
+
+    pub fn with_image_dialog(mut self, pick_image: Option<FileDialogFn>) -> Self {
+        self.pick_image = pick_image;
         self
     }
 
@@ -660,8 +618,8 @@ impl GrimliteUi {
             ctx,
             "grimlite_options",
             "Game Options",
-            [310.0, 260.0],
-            Some([290.0, 245.0]),
+            [315.0, 325.0],
+            Some([295.0, 305.0]),
             &mut open,
             |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
@@ -722,6 +680,59 @@ impl GrimliteUi {
                                 .changed();
                             ui.end_row();
                         });
+                });
+
+                ui.add_space(5.0);
+
+                theme::card(ui, "Lag Killer Wallpaper", |ui| {
+                    let has_wp = self.options.lag_killer_image.is_some();
+                    let display = if has_wp {
+                        "Cached (960×550)"
+                    } else {
+                        "None (Black)"
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            RichText::new(display)
+                                .small()
+                                .color(if has_wp {
+                                    theme::Palette::SUCCESS
+                                } else {
+                                    theme::Palette::TEXT_MUTED
+                                }),
+                        );
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if has_wp && ui.button("Clear").clicked() {
+                                grimlite_bot::options::clear_lag_killer_wallpaper_cache();
+                                self.options.lag_killer_image = None;
+                                changed = true;
+                            }
+                            if ui
+                                .button("Choose...")
+                                .on_hover_text(
+                                    "Pick PNG/JPG — auto-cropped to 960×550 and saved to cache",
+                                )
+                                .clicked()
+                                && let Some(ref picker) = self.pick_image
+                                && let Some(path) = picker()
+                            {
+                                match grimlite_bot::options::prepare_lag_killer_wallpaper(&path) {
+                                    Ok(cached) => {
+                                        self.options.lag_killer_image =
+                                            Some(cached.to_string_lossy().to_string());
+                                        self.options.lag_killer_image_rev =
+                                            self.options.lag_killer_image_rev.wrapping_add(1);
+                                        changed = true;
+                                    }
+                                    Err(e) => {
+                                        self.bot
+                                            .logs
+                                            .push_debug(format!("[LagKiller] {e}"));
+                                    }
+                                }
+                            }
+                        });
+                    });
                 });
             },
         );

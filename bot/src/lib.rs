@@ -284,6 +284,34 @@ impl Bot {
                     // Enforce changed options
                     let desired = bot.options.get();
                     if applied.as_ref() != Some(&desired) {
+                        let image_changed = applied.as_ref().is_none_or(|a| {
+                            a.lag_killer_image != desired.lag_killer_image
+                                || a.lag_killer_image_rev != desired.lag_killer_image_rev
+                        });
+                        if image_changed {
+                            match &desired.lag_killer_image {
+                                Some(path) if !path.trim().is_empty() => {
+                                    match std::fs::read(path) {
+                                        Ok(bytes) => {
+                                            let b64 = encode_base64(&bytes);
+                                            let _ = flash.call_str(
+                                                "setLagKillerImage",
+                                                &[FlashArg::from(b64)],
+                                            );
+                                        }
+                                        Err(e) => {
+                                            bot.logs.push_debug(format!(
+                                                "[LagKiller] Failed to read `{path}`: {e}"
+                                            ));
+                                        }
+                                    }
+                                }
+                                _ => {
+                                    let _ = flash
+                                        .call_str("setLagKillerImage", &[FlashArg::from("")]);
+                                }
+                            }
+                        }
                         let _ = flash.call_bool(
                             "setInfiniteRange",
                             &[FlashArg::Bool(desired.infinite_range)],
@@ -355,4 +383,28 @@ impl Bot {
                 }
             });
     }
+}
+
+fn encode_base64(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    for chunk in input.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
+        let b2 = if chunk.len() > 2 { chunk[2] as u32 } else { 0 };
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((triple >> 18) & 0x3F) as usize] as char);
+        out.push(TABLE[((triple >> 12) & 0x3F) as usize] as char);
+        if chunk.len() > 1 {
+            out.push(TABLE[((triple >> 6) & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+        if chunk.len() > 2 {
+            out.push(TABLE[(triple & 0x3F) as usize] as char);
+        } else {
+            out.push('=');
+        }
+    }
+    out
 }

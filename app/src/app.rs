@@ -903,8 +903,7 @@ impl MainWindow {
                 // a frame all the time) it read 346 for a limit of 144, as if the limit had
                 // not been taken. Not under 60 a second though, so that a menu stays smooth
                 // at a low limit.
-                let child_pending = crate::gui::viewports::has_pending_events();
-                if uncapped && !rendered_movie && !child_pending {
+                if uncapped && !rendered_movie {
                     let menus_want = self.gui.needs_render() && self.gui.wants_redraws();
                     // (TEST SWITCH: `RUFFLE_TEST_MENU_FRAMES_FREE=1`: as it was, for comparisons.)
                     static FREE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -922,7 +921,7 @@ impl MainWindow {
                         return;
                     }
                 }
-                if interpolating && !uncapped && !child_pending && thread_micros.is_some() {
+                if interpolating && !uncapped && thread_micros.is_some() {
                     if rendered_movie {
                         self.repeats_since_picture = 0;
                     } else if self.repeats_since_picture + 1 >= self.draw_divisor
@@ -2368,17 +2367,10 @@ impl ApplicationHandler<RuffleEvent> for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        window_id: WindowId,
+        _window_id: WindowId,
         event: WindowEvent,
     ) {
         enter_runtime!(self);
-
-        if crate::gui::viewports::handle_window_event(window_id, &event) {
-            if let Some(main_window) = &self.main_window {
-                main_window.gui.window().request_redraw();
-            }
-            return;
-        }
 
         if let Some(main_window) = &mut self.main_window {
             main_window.window_event(event_loop, event);
@@ -2422,7 +2414,6 @@ impl ApplicationHandler<RuffleEvent> for App {
         // `MainWindow` needs a tokio context to properly drop.
         {
             enter_runtime!(self);
-            crate::gui::viewports::clear();
             let _ = self.main_window.take();
         }
         // AQW build: how the close divides (a slow one was seen under a heavy load: where).

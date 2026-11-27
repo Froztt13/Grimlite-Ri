@@ -1,12 +1,24 @@
 package grimoire.game
 {
+	import flash.display.DisplayObject;
+	import flash.display.DisplayObjectContainer;
+	import flash.display.Loader;
+	import flash.display.Sprite;
+	import flash.events.Event;
+	import flash.events.IOErrorEvent;
+	import flash.utils.ByteArray;
 	import grimoire.Root;
 
 	/**
-	 * Runtime client toggles (Infinite Range, Provoke, Enemy Magnet, Lag Killer, Skip Cutscenes, Disable Animations).
+	 * Runtime client toggles (Infinite Range, Provoke, Enemy Magnet, Lag Killer + Custom Wallpaper, Skip Cutscenes, Disable Animations).
 	 */
 	public class Settings
 	{
+		private static var lagEnabled:Boolean = false;
+		private static var lagBg:Sprite = null;
+		private static var lagLoader:Loader = null;
+		private static var lagHasImage:Boolean = false;
+
 		public static function SetInfiniteRange(enabled:Boolean = true):void
 		{
 			try
@@ -55,9 +67,160 @@ package grimoire.game
 		{
 			try
 			{
-				Root.Game.world.visible = (state == "False" || state == "false");
+				lagEnabled = !(state == "False" || state == "false");
+				if (Root.Game != null && Root.Game.world != null)
+				{
+					Root.Game.world.visible = !lagEnabled;
+				}
+				syncLagBg();
 			}
 			catch (e:Error) {}
+		}
+
+		/**
+		 * Loads a custom PNG/JPG wallpaper (base64-encoded) shown behind AQW's UI whenever Lag Killer is ON.
+		 * Pass an empty string to clear the wallpaper and return to plain black.
+		 */
+		public static function SetLagKillerImage(base64Data:String):void
+		{
+			try
+			{
+				if (lagBg == null)
+				{
+					lagBg = new Sprite();
+					lagBg.mouseEnabled = false;
+					lagBg.mouseChildren = false;
+				}
+				while (lagBg.numChildren > 0)
+				{
+					lagBg.removeChildAt(0);
+				}
+				lagLoader = null;
+				lagHasImage = false;
+
+				if (base64Data == null || base64Data.length == 0)
+				{
+					syncLagBg();
+					return;
+				}
+
+				var bytes:ByteArray = decodeBase64(base64Data);
+				if (bytes.length == 0)
+				{
+					syncLagBg();
+					return;
+				}
+
+				lagLoader = new Loader();
+				lagLoader.contentLoaderInfo.addEventListener(Event.COMPLETE, onLagImageLoaded);
+				lagLoader.contentLoaderInfo.addEventListener(IOErrorEvent.IO_ERROR, onLagImageError);
+				lagLoader.loadBytes(bytes);
+			}
+			catch (e:Error) {}
+		}
+
+		private static function onLagImageLoaded(event:Event):void
+		{
+			try
+			{
+				if (lagBg == null || lagLoader == null)
+				{
+					return;
+				}
+				while (lagBg.numChildren > 0)
+				{
+					lagBg.removeChildAt(0);
+				}
+
+				var content:DisplayObject = lagLoader.content;
+				var stageW:Number = 960;
+				var stageH:Number = 550;
+				if (content != null && content.width > 0 && content.height > 0)
+				{
+					var scaleX:Number = stageW / content.width;
+					var scaleY:Number = stageH / content.height;
+					var scale:Number = scaleX > scaleY ? scaleX : scaleY;
+					content.scaleX = scale;
+					content.scaleY = scale;
+					content.x = (stageW - content.width) * 0.5;
+					content.y = (stageH - content.height) * 0.5;
+				}
+				lagBg.addChild(lagLoader);
+				lagHasImage = true;
+				syncLagBg();
+			}
+			catch (e:Error) {}
+		}
+
+		private static function onLagImageError(event:IOErrorEvent):void
+		{
+			lagHasImage = false;
+			syncLagBg();
+		}
+
+		private static function syncLagBg():void
+		{
+			try
+			{
+				if (lagBg == null)
+				{
+					return;
+				}
+				if (Root.Game != null && Root.Game is DisplayObjectContainer && Root.Game.world != null)
+				{
+					var container:DisplayObjectContainer = DisplayObjectContainer(Root.Game);
+					var worldObj:DisplayObject = DisplayObject(Root.Game.world);
+					if (worldObj.parent == container)
+					{
+						var worldIdx:int = container.getChildIndex(worldObj);
+						if (lagBg.parent != container)
+						{
+							container.addChildAt(lagBg, worldIdx);
+						}
+						else
+						{
+							var curIdx:int = container.getChildIndex(lagBg);
+							if (curIdx > worldIdx)
+							{
+								container.setChildIndex(lagBg, worldIdx);
+							}
+						}
+					}
+				}
+				lagBg.visible = lagEnabled && lagHasImage;
+			}
+			catch (e:Error) {}
+		}
+
+		private static function decodeBase64(data:String):ByteArray
+		{
+			var out:ByteArray = new ByteArray();
+			var alphabet:String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+			var buf:int = 0;
+			var bits:int = 0;
+			var len:int = data.length;
+			for (var i:int = 0; i < len; i++)
+			{
+				var ch:String = data.charAt(i);
+				if (ch == "=")
+				{
+					break;
+				}
+				var val:int = alphabet.indexOf(ch);
+				if (val < 0)
+				{
+					continue;
+				}
+				buf = (buf << 6) | val;
+				bits += 6;
+				if (bits >= 8)
+				{
+					bits -= 8;
+					out.writeByte((buf >> bits) & 0xFF);
+				}
+			}
+			out.position = 0;
+			return out;
 		}
 
 		public static function SetSkipCutscenes():void

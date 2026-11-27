@@ -8,7 +8,6 @@ mod mugetsu_menu;
 mod picker;
 mod prompt;
 mod theme;
-pub mod viewports;
 mod widgets;
 
 pub use controller::GuiController;
@@ -73,6 +72,11 @@ fn build_grimlite_ui(bot: Arc<grimlite_bot::Bot>) -> grimlite_egui::GrimliteUi {
                 .save_file()
         })),
     )
+    .with_image_dialog(Some(Box::new(|| {
+        rfd::FileDialog::new()
+            .add_filter("Image", &["png", "jpg", "jpeg"])
+            .pick_file()
+    })))
 }
 
 /// The main controller for the Ruffle GUI.
