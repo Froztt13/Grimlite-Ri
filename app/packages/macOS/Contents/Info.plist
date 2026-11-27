@@ -1,30 +1,34 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple/DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>Ruffle</string>
+    <string>Grimlite Ri</string>
     <key>CFBundleExecutable</key>
-    <string>ruffle</string>
+    <string>grimlite-ri</string>
     <key>CFBundleIconFile</key>
-    <string>RuffleMacIcon</string>
-    <key>CFBundleIconName</key>
-    <string>RuffleMacIcon</string>
+    <string>GrimliteRi.icns</string>
     <key>CFBundleIdentifier</key>
-    <string>rs.ruffle.ruffle</string>
+    <string>com.grimlite.ri</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>Ruffle</string>
+    <string>Grimlite Ri</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>0.1.0</string>
     <key>CFBundleSupportedPlatforms</key>
     <array>
         <string>MacOSX</string>
     </array>
-    <key>NSAccentColorName</key>
-    <string>RuffleOrange</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
 </dict>
 </plist>

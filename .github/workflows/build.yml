@@ -1,0 +1,134 @@
+name: Build (macOS & Windows)
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish artifacts to GitHub Release"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Release tag (required only if publish_release is true, e.g. v0.1.0)"
+        type: string
+        default: ""
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-14
+    steps:
+      - name: Checkout repository (with ruffle submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run grimlite_bot tests
+        run: cargo test -p grimlite_bot
+
+      - name: Build grimlite-ri (release)
+        run: |
+          cargo build --release -p grimlite-ri \
+            --no-default-features \
+            --features software_video,external_video,lzma,jpegxr,fontconfig-dlopen
+
+      - name: Package Grimlite Ri.app
+        run: |
+          chmod +x scripts/build-macos-app.sh
+          ./scripts/build-macos-app.sh --release --no-build
+
+      - name: Build grimlite-headless (release)
+        run: cargo build --release -p grimlite-headless
+
+      - name: Archive macOS artifacts
+        run: |
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            "target/release/bundle/Grimlite Ri.app" \
+            "dist/grimlite-ri-macos-arm64.zip"
+          zip -j "dist/grimlite-headless-macos-arm64.zip" "target/release/grimlite-headless"
+
+      - name: Upload macOS artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64
+          path: dist/*.zip
+
+  build-windows:
+    name: Windows (x64)
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository (with ruffle submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run grimlite_bot tests
+        run: cargo test -p grimlite_bot
+
+      - name: Build grimlite-ri (release)
+        run: |
+          cargo build --release -p grimlite-ri `
+            --no-default-features `
+            --features software_video,external_video,lzma,jpegxr
+
+      - name: Build grimlite-headless (release)
+        run: cargo build --release -p grimlite-headless
+
+      - name: Archive Windows artifacts
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Compress-Archive -Path "target/release/grimlite-ri.exe" -DestinationPath "dist/grimlite-ri-windows-x64.zip" -Force
+          Compress-Archive -Path "target/release/grimlite-headless.exe" -DestinationPath "dist/grimlite-headless-windows-x64.zip" -Force
+
+      - name: Upload Windows artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x64
+          path: dist/*.zip
+
+  release:
+    name: Publish GitHub Release
+    needs: [build-macos, build-windows]
+    if: ${{ inputs.publish_release == true }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          TAG="${{ inputs.release_tag }}"
+          if [ -z "$TAG" ]; then
+            TAG="build-${{ github.run_number }}"
+          fi
+          echo "name=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          files: artifacts/*.zip
