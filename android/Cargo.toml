@@ -1,0 +1,35 @@
+[package]
+name = "grimlite_android"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["cdylib"]
+
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "android")'.dependencies]
+grimlite_bot = { path = "../bot" }
+grimlite_frontend = { path = "../frontend" }
+grimlite_egui = { path = "../egui_ui" }
+ruffle_core = { path = "../ruffle/core", features = ["lzma", "jpegxr", "default_compatibility_rules", "default_font"] }
+ruffle_render = { path = "../ruffle/render" }
+ruffle_render_wgpu = { path = "../ruffle/render/wgpu" }
+ruffle_frontend_utils = { path = "../ruffle/frontend-utils", default-features = false, features = ["navigator", "fs"] }
+reqwest = { workspace = true, features = ["rustls-no-provider"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+rustls-platform-verifier = "0.7.1"
+jni = { version = "0.22.4", default-features = false }
+wgpu = { workspace = true }
+egui = { workspace = true }
+egui-wgpu = { workspace = true }
+futures = { workspace = true }
+android-activity = { version = "0.6.1", features = ["game-activity"] }
+android_logger = "0.15.1"
+async-task = "4.7.1"
+log = "0.4"
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+url = { workspace = true }

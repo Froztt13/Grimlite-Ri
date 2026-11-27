@@ -16,9 +16,179 @@ use grimlite_bot::options::BotOptions;
 use std::sync::Arc;
 
 pub const TAB_BAR_HEIGHT: f32 = 26.0;
+pub const TAB_RAIL_WIDTH: f32 = 58.0;
 pub const NAV_BAR_HEIGHT: f32 = 34.0;
 const APP_ICON_RGBA: &[u8] = include_bytes!("../assets/grimlite-icon-64.rgba");
 const GITHUB_URL: &str = "https://github.com/Froztt13/Grimlite-Ri";
+
+/// Layout orientation for the multi-account tab switcher (`TopBar` on desktop, `LeftRail` on mobile/Android).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabLayout {
+    TopBar,
+    LeftRail,
+}
+
+/// Dispatches to [`show_tab_bar`] (desktop) or [`show_tab_rail_left`] (mobile/Android).
+pub fn show_tabs(
+    egui_ui: &mut Ui,
+    layout: TabLayout,
+    tabs: &[TabDescriptor],
+    active_id: u64,
+) -> TabBarAction {
+    match layout {
+        TabLayout::TopBar => show_tab_bar(egui_ui, tabs, active_id),
+        TabLayout::LeftRail => show_tab_rail_left(egui_ui, tabs, active_id),
+    }
+}
+
+/// Renders a thumb-friendly vertical multi-account tab rail on the left edge (mobile/Android layout).
+pub fn show_tab_rail_left(egui_ui: &mut Ui, tabs: &[TabDescriptor], active_id: u64) -> TabBarAction {
+    let mut action = TabBarAction::None;
+    let can_close = tabs.len() > 1;
+
+    Panel::left("grimlite_tab_rail")
+        .exact_size(TAB_RAIL_WIDTH)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::Palette::BG_INPUT)
+                .inner_margin(egui::Margin::symmetric(5, 6))
+                .stroke(egui::Stroke::new(1.0, theme::Palette::BORDER_SUBTLE)),
+        )
+        .show(egui_ui, |ui| {
+            ui.vertical_centered(|ui| {
+                ui.spacing_mut().item_spacing.y = 6.0;
+
+                // "+ New" account button at top of rail
+                if ui
+                    .add_sized(
+                        [46.0, 30.0],
+                        egui::Button::new(RichText::new("+").strong().size(16.0))
+                            .fill(theme::Palette::ACCENT_PRIMARY)
+                            .corner_radius(egui::CornerRadius::same(6)),
+                    )
+                    .on_hover_text("Open new account tab")
+                    .clicked()
+                {
+                    action = TabBarAction::NewTab;
+                }
+
+                ui.separator();
+
+                ScrollArea::vertical()
+                    .id_salt("grimlite_tab_rail_scroll")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| {
+                        ui.vertical_centered(|ui| {
+                            ui.spacing_mut().item_spacing.y = 6.0;
+                            for (idx, tab) in tabs.iter().enumerate() {
+                                let is_active = tab.id == active_id;
+                                let fill = if is_active {
+                                    theme::Palette::ACCENT_SELECT
+                                } else {
+                                    theme::Palette::BG_SURFACE
+                                };
+                                let stroke = if is_active {
+                                    egui::Stroke::new(1.5, theme::Palette::BORDER_FOCUS)
+                                } else {
+                                    egui::Stroke::new(1.0, theme::Palette::BORDER_SUBTLE)
+                                };
+
+                                let frame_resp = egui::Frame::new()
+                                    .fill(fill)
+                                    .stroke(stroke)
+                                    .corner_radius(egui::CornerRadius::same(6))
+                                    .inner_margin(egui::Margin::symmetric(3, 4))
+                                    .show(ui, |ui| {
+                                        ui.set_min_size(egui::vec2(40.0, 36.0));
+                                        ui.vertical_centered(|ui| {
+                                            ui.spacing_mut().item_spacing.y = 2.0;
+
+                                            // Top row: status dot + optional close button on active tab
+                                            ui.horizontal(|ui| {
+                                                let dot_color = if tab.bot_running {
+                                                    theme::Palette::WARNING
+                                                } else if tab.logged_in {
+                                                    theme::Palette::SUCCESS
+                                                } else {
+                                                    theme::Palette::TEXT_MUTED
+                                                };
+                                                let (rect, _) = ui.allocate_exact_size(
+                                                    egui::vec2(7.0, 7.0),
+                                                    egui::Sense::hover(),
+                                                );
+                                                ui.painter()
+                                                    .circle_filled(rect.center(), 3.2, dot_color);
+
+                                                if can_close && is_active {
+                                                    ui.with_layout(
+                                                        egui::Layout::right_to_left(
+                                                            egui::Align::Center,
+                                                        ),
+                                                        |ui| {
+                                                            if ui
+                                                                .add(
+                                                                    egui::Label::new(
+                                                                        RichText::new("×")
+                                                                            .size(11.0)
+                                                                            .strong()
+                                                                            .color(Color32::WHITE),
+                                                                    )
+                                                                    .sense(egui::Sense::click()),
+                                                                )
+                                                                .clicked()
+                                                            {
+                                                                action =
+                                                                    TabBarAction::Close(tab.id);
+                                                            }
+                                                        },
+                                                    );
+                                                }
+                                            });
+
+                                            // Short label (username prefix or #N)
+                                            let short = if tab.logged_in && !tab.label.is_empty() {
+                                                tab.label.chars().take(5).collect::<String>()
+                                            } else {
+                                                format!("#{}", idx + 1)
+                                            };
+                                            let lbl = ui
+                                                .add(
+                                                    egui::Label::new(
+                                                        RichText::new(short)
+                                                            .size(10.5)
+                                                            .strong()
+                                                            .color(if is_active {
+                                                                Color32::WHITE
+                                                            } else {
+                                                                theme::Palette::TEXT_PRIMARY
+                                                            }),
+                                                    )
+                                                    .sense(egui::Sense::click()),
+                                                )
+                                                .on_hover_text(&tab.label);
+                                            if lbl.clicked() && !is_active {
+                                                action = TabBarAction::Switch(tab.id);
+                                            }
+                                        });
+                                    });
+
+                                if frame_resp
+                                    .response
+                                    .interact(egui::Sense::click())
+                                    .clicked()
+                                    && !is_active
+                                    && action == TabBarAction::None
+                                {
+                                    action = TabBarAction::Switch(tab.id);
+                                }
+                            }
+                        });
+                    });
+            });
+        });
+
+    action
+}
 
 /// Lightweight metadata for rendering a single account tab in the desktop multi-tab bar.
 #[derive(Clone, Debug)]
