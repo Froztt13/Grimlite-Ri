@@ -1,4 +1,4 @@
-name: Build (macOS & Windows)
+name: Build (macOS, Windows & Android)
 
 on:
   workflow_dispatch:
@@ -9,6 +9,10 @@ on:
         default: true
       build_windows:
         description: "Build Windows (x64)"
+        type: boolean
+        default: true
+      build_android:
+        description: "Build Android (ARMv8 / arm64-v8a)"
         type: boolean
         default: true
       publish_release:
@@ -119,10 +123,75 @@ jobs:
           name: windows-x64
           path: dist/*.zip
 
+  build-android:
+    name: Android (ARMv8 / arm64-v8a)
+    if: ${{ inputs.build_android == true }}
+    runs-on: ubuntu-latest
+    env:
+      NDK_VERSION: 28.2.13676358
+    steps:
+      - name: Checkout repository (with ruffle submodule)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: gradle
+
+      - name: Setup Android SDK & NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --licenses > /dev/null || true
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "ndk;$NDK_VERSION"
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$NDK_VERSION" >> "$GITHUB_ENV"
+          printf 'sdk.dir=%s\n' "$ANDROID_HOME" > android/local.properties
+
+      - name: Setup Rust toolchain (aarch64-linux-android)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
+          targets: aarch64-linux-android
+
+      - name: Install cargo-ndk
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-ndk
+
+      - name: Cache Cargo artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: android-arm64-v8a
+
+      - name: Run grimlite_bot tests
+        run: cargo test -p grimlite_bot
+
+      - name: Build Android APK (arm64-v8a release)
+        run: |
+          chmod +x scripts/build-android-apk.sh android/gradlew
+          ./scripts/build-android-apk.sh --release --abi=arm64-v8a
+
+      - name: Collect Android APK artifact
+        run: |
+          mkdir -p dist
+          cp android/app/build/outputs/apk/release/app-release.apk \
+            dist/grimlite-ri-android-arm64-v8a.apk
+
+      - name: Upload Android artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64-v8a
+          path: dist/*.apk
+
   release:
     name: Publish GitHub Release
-    needs: [build-macos, build-windows]
-    if: ${{ always() && inputs.publish_release == true && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.build_macos == true || inputs.build_windows == true) }}
+    needs: [build-macos, build-windows, build-android]
+    if: ${{ always() && inputs.publish_release == true && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.build_macos == true || inputs.build_windows == true || inputs.build_android == true) }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
@@ -145,4 +214,6 @@ jobs:
         with:
           tag_name: ${{ steps.tag.outputs.name }}
           generate_release_notes: true
-          files: artifacts/*.zip
+          files: |
+            artifacts/*.zip
+            artifacts/*.apk
