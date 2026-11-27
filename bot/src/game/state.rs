@@ -99,6 +99,8 @@ pub struct GameState {
     pub skills: RwLock<Vec<SkillSlot>>,
     pub haste: RwLock<f64>,
     pub last_skill_cast: RwLock<Option<std::time::Instant>>,
+    pub last_animation_message: RwLock<String>,
+    pub enemy_auras: RwLock<HashMap<(i32, String), std::time::Instant>>,
 }
 
 impl GameState {
@@ -222,6 +224,24 @@ impl GameState {
             .cloned()
     }
 
+    pub fn last_animation_message(&self) -> String {
+        self.last_animation_message.read().clone()
+    }
+
+    pub fn enemy_aura_remaining_ms(&self, mon_id: i32, aura_name: &str) -> i32 {
+        let key = (mon_id, aura_name.trim().to_lowercase());
+        let auras = self.enemy_auras.read();
+        let Some(exp) = auras.get(&key) else {
+            return 0;
+        };
+        let now = std::time::Instant::now();
+        if *exp > now {
+            (*exp - now).as_millis() as i32
+        } else {
+            0
+        }
+    }
+
     pub fn reset_session(&self) {
         *self.player.write() = PlayerSnapshot::default();
         *self.user_id.write() = 0;
@@ -236,6 +256,8 @@ impl GameState {
         self.skills.write().clear();
         *self.haste.write() = 0.0;
         *self.last_skill_cast.write() = None;
+        self.last_animation_message.write().clear();
+        self.enemy_auras.write().clear();
     }
 }
 
@@ -858,6 +880,49 @@ impl StatePacketInterceptor {
                             && let Some(hp) = mval.get("intHP").and_then(|x| x.as_i64())
                         {
                             mon.hp = hp as i32;
+                        }
+                    }
+                }
+                if let Some(anims) = o.get("anims").and_then(|a| a.as_array())
+                    && let Some(msg) = anims
+                        .iter()
+                        .rev()
+                        .find_map(|a| a.get("msg").and_then(|m| m.as_str()))
+                {
+                    *self.state.last_animation_message.write() = msg.to_string();
+                }
+                if let Some(auras) = o.get("a").and_then(|a| a.as_array()) {
+                    let mut map = self.state.enemy_auras.write();
+                    let now = std::time::Instant::now();
+                    for act in auras {
+                        let cmd = act.get("cmd").and_then(|c| c.as_str()).unwrap_or("");
+                        let t_inf = act.get("tInf").and_then(|t| t.as_str()).unwrap_or("");
+                        let Some(mid_str) = t_inf.strip_prefix("m:") else {
+                            continue;
+                        };
+                        let Ok(mid) = mid_str.parse::<i32>() else {
+                            continue;
+                        };
+                        if cmd == "aura--" || cmd == "aura-" {
+                            if let Some(nam) = act.pointer("/aura/nam").and_then(|n| n.as_str()) {
+                                map.remove(&(mid, nam.to_lowercase()));
+                            }
+                        } else if (cmd == "aura+" || cmd == "aura++")
+                            && let Some(auras_arr) = act.get("auras").and_then(|a| a.as_array())
+                        {
+                            for aura in auras_arr {
+                                if let Some(nam) = aura.get("nam").and_then(|n| n.as_str()) {
+                                    let dur_s = aura
+                                        .get("dur")
+                                        .and_then(|d| d.as_f64())
+                                        .unwrap_or(0.0);
+                                    if dur_s > 0.0 {
+                                        let exp = now
+                                            + std::time::Duration::from_secs_f64(dur_s);
+                                        map.insert((mid, nam.to_lowercase()), exp);
+                                    }
+                                }
+                            }
                         }
                     }
                 }
