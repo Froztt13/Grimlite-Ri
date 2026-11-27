@@ -1652,6 +1652,8 @@ impl MainWindow {
                     }
                     new_time + player.time_til_next_frame()
                 });
+                // Keep all background account tabs ticking (sockets, bots, Maid) without GPU rendering.
+                self.player.tick_background_tabs(dt);
                 self.check_redraw();
             }
             self.pace_interpolation();
@@ -2292,13 +2294,25 @@ impl ApplicationHandler<RuffleEvent> for App {
             (Some(main_window), RuffleEvent::ExportBundle) => {
                 main_window.gui.export_bundle();
             }
-            (Some(main_window), RuffleEvent::GrimliteFlashCall(req)) => {
-                let mut player = main_window.player.get();
+            (Some(main_window), RuffleEvent::GrimliteFlashCall(tab_id, req)) => {
+                let mut player = main_window.player.get_by_tab_id(tab_id);
                 grimlite_frontend::ruffle_host::answer_flash_call(player.as_deref_mut(), req);
             }
-            (None, RuffleEvent::GrimliteFlashCall(req)) => {
+            (None, RuffleEvent::GrimliteFlashCall(_, req)) => {
                 grimlite_frontend::ruffle_host::answer_flash_call(None, req);
             }
+            (Some(main_window), RuffleEvent::GrimliteTabAction(action)) => match action {
+                grimlite_egui::TabBarAction::NewTab => {
+                    main_window.gui.create_new_tab(&mut main_window.player);
+                }
+                grimlite_egui::TabBarAction::Switch(tab_id) => {
+                    main_window.gui.switch_tab(&mut main_window.player, tab_id);
+                }
+                grimlite_egui::TabBarAction::Close(tab_id) => {
+                    main_window.gui.close_tab(&mut main_window.player, tab_id);
+                }
+                grimlite_egui::TabBarAction::None => {}
+            },
 
             (Some(main_window), RuffleEvent::EnterFullScreen) => {
                 if let Some(mut player) = main_window.player.get()

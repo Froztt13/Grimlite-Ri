@@ -368,28 +368,27 @@ impl MaidPreset {
     }
 }
 
-/// Ultra Boss Extra modes matching `cmbUltraBoss` indices in Grimlite-Li `MaidRemake.cs`.
+/// Ultra Boss Extra modes (`Auto Potion` at index 11, so `Gramiel L1..R2` are 7..10).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum UltraBossMode {
     #[default]
     None = 0,
-    AutoPotion = 1,
-    AscSolsticeP1 = 2,
-    AscSolsticeP2 = 3,
-    AscMidnightP1 = 4,
-    AscMidnightP2 = 5,
-    AstEmpyreanP1 = 6,
-    AstEmpyreanP2 = 7,
-    GramielL1 = 8,
-    GramielL2 = 9,
-    GramielR1 = 10,
-    GramielR2 = 11,
+    AscSolsticeP1 = 1,
+    AscSolsticeP2 = 2,
+    AscMidnightP1 = 3,
+    AscMidnightP2 = 4,
+    AstEmpyreanP1 = 5,
+    AstEmpyreanP2 = 6,
+    GramielL1 = 7,
+    GramielL2 = 8,
+    GramielR1 = 9,
+    GramielR2 = 10,
+    AutoPotion = 11,
 }
 
 impl UltraBossMode {
     pub const ALL: &'static [Self] = &[
         Self::None,
-        Self::AutoPotion,
         Self::AscSolsticeP1,
         Self::AscSolsticeP2,
         Self::AscMidnightP1,
@@ -400,23 +399,11 @@ impl UltraBossMode {
         Self::GramielL2,
         Self::GramielR1,
         Self::GramielR2,
+        Self::AutoPotion,
     ];
 
-    /// Dropdown display order with `Auto Potion` placed at the bottom (preserves Grimlite-Li JSON indices).
-    pub const DISPLAY_ORDER: &'static [Self] = &[
-        Self::None,
-        Self::AscSolsticeP1,
-        Self::AscSolsticeP2,
-        Self::AscMidnightP1,
-        Self::AscMidnightP2,
-        Self::AstEmpyreanP1,
-        Self::AstEmpyreanP2,
-        Self::GramielL1,
-        Self::GramielL2,
-        Self::GramielR1,
-        Self::GramielR2,
-        Self::AutoPotion,
-    ];
+    /// Dropdown display order (identical to `ALL`, with `Auto Potion` at index 11).
+    pub const DISPLAY_ORDER: &'static [Self] = Self::ALL;
 
     pub fn from_index(idx: usize) -> Self {
         Self::ALL.get(idx).copied().unwrap_or(Self::None)

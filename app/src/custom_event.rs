@@ -55,6 +55,9 @@ pub enum RuffleEvent {
     /// Export Ruffle Bundle from currently playing content and open save dialog.
     ExportBundle,
 
-    /// Grimlite Ri: marshal a Flash ExternalInterface call onto the main/engine thread.
-    GrimliteFlashCall(grimlite_frontend::ruffle_host::FlashCallRequest),
+    /// Grimlite Ri: marshal a Flash ExternalInterface call onto the main/engine thread for a specific tab.
+    GrimliteFlashCall(u64, grimlite_frontend::ruffle_host::FlashCallRequest),
+
+    /// Grimlite Ri: user switched, opened, or closed an account tab.
+    GrimliteTabAction(grimlite_egui::TabBarAction),
 }

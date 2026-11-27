@@ -34,14 +34,46 @@ use menu_bar::MenuBar;
 use rfd::AsyncFileDialog;
 use ruffle_core::debug_ui::Message as DebugMessage;
 use ruffle_core::{Player, PlayerEvent};
-use std::sync::{MutexGuard, Weak};
+use std::collections::HashMap;
+use std::sync::{Arc, MutexGuard, Weak};
 use std::{fs, mem};
 use winit::event_loop::EventLoopProxy;
 
-/// Size of the top menu bar in pixels.
+/// Size of the top chrome (account tab bar + Grimlite navbar) in logical pixels.
 /// This is the offset at which the movie will be shown,
 /// and added to the window size if trying to match a movie.
-pub const MENU_HEIGHT: u32 = grimlite_egui::NAV_BAR_HEIGHT as u32;
+pub const MENU_HEIGHT: u32 =
+    (grimlite_egui::TAB_BAR_HEIGHT + grimlite_egui::NAV_BAR_HEIGHT) as u32;
+
+fn build_grimlite_ui(bot: Arc<grimlite_bot::Bot>) -> grimlite_egui::GrimliteUi {
+    grimlite_egui::GrimliteUi::new(
+        bot,
+        Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Grimoire Bot", &["gbot", "json"])
+                .pick_file()
+        })),
+        Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Grimoire Bot", &["gbot"])
+                .set_file_name("bot.gbot")
+                .save_file()
+        })),
+    )
+    .with_maid_dialogs(
+        Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Maid Config", &["json"])
+                .pick_file()
+        })),
+        Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .add_filter("Maid Config", &["json"])
+                .set_file_name("maid.json")
+                .save_file()
+        })),
+    )
+}
 
 /// The main controller for the Ruffle GUI.
 pub struct RuffleGui {
@@ -54,7 +86,9 @@ pub struct RuffleGui {
 
     was_suspended_before_debug: bool,
     preferences: GlobalPreferences,
-    grimlite_ui: grimlite_egui::GrimliteUi,
+    tab_uis: HashMap<u64, grimlite_egui::GrimliteUi>,
+    tab_bots: Vec<(u64, Arc<grimlite_bot::Bot>)>,
+    active_tab_id: u64,
 }
 
 impl RuffleGui {
@@ -85,34 +119,34 @@ impl RuffleGui {
 
             event_loop,
             preferences,
-            grimlite_ui: grimlite_egui::GrimliteUi::new(
-                crate::grimlite::bot(),
-                Some(Box::new(|| {
-                    rfd::FileDialog::new()
-                        .add_filter("Grimoire Bot", &["gbot", "json"])
-                        .pick_file()
-                })),
-                Some(Box::new(|| {
-                    rfd::FileDialog::new()
-                        .add_filter("Grimoire Bot", &["gbot"])
-                        .set_file_name("bot.gbot")
-                        .save_file()
-                })),
-            )
-            .with_maid_dialogs(
-                Some(Box::new(|| {
-                    rfd::FileDialog::new()
-                        .add_filter("Maid Config", &["json"])
-                        .pick_file()
-                })),
-                Some(Box::new(|| {
-                    rfd::FileDialog::new()
-                        .add_filter("Maid Config", &["json"])
-                        .set_file_name("maid.json")
-                        .save_file()
-                })),
-            ),
+            tab_uis: HashMap::new(),
+            tab_bots: Vec::new(),
+            active_tab_id: 0,
         }
+    }
+
+    pub fn register_tab(&mut self, tab_id: u64, bot: Arc<grimlite_bot::Bot>) {
+        self.tab_uis
+            .insert(tab_id, build_grimlite_ui(bot.clone()));
+        if !self.tab_bots.iter().any(|(id, _)| *id == tab_id) {
+            self.tab_bots.push((tab_id, bot));
+        }
+        self.active_tab_id = tab_id;
+    }
+
+    pub fn set_active_tab(&mut self, tab_id: u64) {
+        self.active_tab_id = tab_id;
+    }
+
+    pub fn remove_tab(&mut self, tab_id: u64) {
+        self.tab_uis.remove(&tab_id);
+        self.tab_bots.retain(|(id, _)| *id != tab_id);
+    }
+
+    pub fn clear_tabs(&mut self) {
+        self.tab_uis.clear();
+        self.tab_bots.clear();
+        self.active_tab_id = 0;
     }
 
     /// Renders all of the main Ruffle UI, including the main menu and context menus.
@@ -134,7 +168,40 @@ impl RuffleGui {
         }
 
         self.dialogs.show(&locale, egui_ctx, player.as_deref_mut());
-        self.grimlite_ui.show(egui_ctx, egui_ui);
+
+        // Account tab bar (always visible at top for multi-account switching)
+        let descriptors: Vec<grimlite_egui::TabDescriptor> = self
+            .tab_bots
+            .iter()
+            .map(|(id, bot)| {
+                let snap = bot.player_snapshot();
+                let label = if snap.logged_in && !snap.username.trim().is_empty() {
+                    snap.username
+                } else {
+                    format!("Account #{id}")
+                };
+                let bot_running = bot.runner.is_running()
+                    || bot.auto_attack.is_running()
+                    || bot.maid.is_running();
+                grimlite_egui::TabDescriptor {
+                    id: *id,
+                    label,
+                    logged_in: snap.logged_in,
+                    bot_running,
+                }
+            })
+            .collect();
+        let tab_action =
+            grimlite_egui::show_tab_bar(egui_ui, &descriptors, self.active_tab_id);
+        if tab_action != grimlite_egui::TabBarAction::None {
+            let _ = self
+                .event_loop
+                .send_event(RuffleEvent::GrimliteTabAction(tab_action));
+        }
+
+        if let Some(active_ui) = self.tab_uis.get_mut(&self.active_tab_id) {
+            active_ui.show(egui_ctx, egui_ui);
+        }
 
         if let Some(player) = player {
             let was_suspended = player.debug_ui().should_suspend_player();

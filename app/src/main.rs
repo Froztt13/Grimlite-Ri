@@ -358,6 +358,14 @@ fn mugetsu_args() -> Vec<std::ffi::OsString> {
 }
 
 fn main() -> Result<(), Error> {
+    // Grimlite Ri multi-tab: disable `ruffle_render_wgpu::segments` thread-local encoder queue so
+    // multiple account tabs sharing the main thread never steal each other's unfinished encoders
+    // (which caused wgpu `StagingBelt staging buffer is still mapped` validation errors).
+    // SAFETY: called at process startup before any other thread exists.
+    if env::var_os("RUFFLE_SERIAL_ENCODING").is_none() {
+        unsafe { env::set_var("RUFFLE_SERIAL_ENCODING", "1") };
+    }
+
     // AQW build: started again after a graphics change: the previous Mugetsu ends first.
     mugetsu::wait_for_restarted_from();
     let prev_hook = std::panic::take_hook();

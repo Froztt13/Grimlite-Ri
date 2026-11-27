@@ -120,6 +120,8 @@ struct ActivePlayer {
 impl ActivePlayer {
     #[expect(clippy::too_many_arguments)]
     pub fn new(
+        tab_id: u64,
+        bot: Arc<grimlite_bot::Bot>,
         opt: &LaunchOptions,
         event_loop: EventLoopProxy<RuffleEvent>,
         content_descriptor: &ContentDescriptor,
@@ -295,7 +297,7 @@ impl ActivePlayer {
         } else {
             // Grimlite Ri: connect host SWF ExternalInterface to our Rust bot engine.
             builder = builder.with_external_interface(Box::new(
-                grimlite_frontend::external::GrimliteExternalInterface::new(crate::grimlite::bot()),
+                grimlite_frontend::external::GrimliteExternalInterface::new(bot.clone()),
             ));
         }
 
@@ -318,7 +320,7 @@ impl ActivePlayer {
 
         let navigator = grimlite_frontend::capture::CaptureNavigator::new(
             navigator,
-            Some(crate::grimlite::bot().capture.clone()),
+            Some(bot.capture.clone()),
         );
 
         builder = builder
@@ -362,17 +364,17 @@ impl ActivePlayer {
             .with_avm2_dse_enabled(opt.avm2_dse_enabled);
         let player = builder.build();
 
-        // Grimlite Ri: connect Rust -> Flash marshalling onto this engine thread.
+        // Grimlite Ri: connect Rust -> Flash marshalling onto this engine thread for this tab.
         let dispatch_loop = event_loop.clone();
         let flash_host = Arc::new(grimlite_frontend::ruffle_host::RuffleFlashHost::new(
             std::thread::current().id(),
             move |req| {
                 dispatch_loop
-                    .send_event(RuffleEvent::GrimliteFlashCall(req))
+                    .send_event(RuffleEvent::GrimliteFlashCall(tab_id, req))
                     .map_err(|_| "event loop closed".to_string())
             },
         ));
-        crate::grimlite::bot().set_host(flash_host);
+        bot.set_host(flash_host);
 
         window.set_title("Grimlite Ri");
 
@@ -458,10 +460,20 @@ impl ActivePlayer {
     }
 }
 
-/// Owner of a Ruffle Player (via ActivePlayer),
-/// responsible for either creating, destroying or communicating with that player.
+struct TabSession {
+    tab_id: u64,
+    bot: Arc<grimlite_bot::Bot>,
+    active: ActivePlayer,
+}
+
+/// Owner of one or more Ruffle Players (one per account tab),
+/// responsible for creating, switching, ticking background tabs, and destroying sessions.
 pub struct PlayerController {
-    player: Option<ActivePlayer>,
+    tabs: Vec<TabSession>,
+    active_index: usize,
+    next_tab_id: u64,
+    last_opt: Option<LaunchOptions>,
+    last_content: Option<ContentDescriptor>,
     event_loop: EventLoopProxy<RuffleEvent>,
     window: Arc<Window>,
     descriptors: Arc<Descriptors>,
@@ -480,7 +492,11 @@ impl PlayerController {
         file_picker: FilePicker,
     ) -> Self {
         Self {
-            player: None,
+            tabs: Vec::new(),
+            active_index: 0,
+            next_tab_id: 1,
+            last_opt: None,
+            last_content: None,
             event_loop,
             window,
             descriptors,
@@ -495,8 +511,16 @@ impl PlayerController {
         opt: &LaunchOptions,
         content_descriptor: &ContentDescriptor,
         movie_view: MovieView,
-    ) {
-        self.player = Some(ActivePlayer::new(
+    ) -> (u64, Arc<grimlite_bot::Bot>) {
+        self.last_opt = Some(opt.clone());
+        self.last_content = Some(content_descriptor.clone());
+
+        let tab_id = self.next_tab_id;
+        self.next_tab_id += 1;
+        let bot = grimlite_bot::Bot::new();
+        let active = ActivePlayer::new(
+            tab_id,
+            bot.clone(),
             opt,
             self.event_loop.clone(),
             content_descriptor,
@@ -506,23 +530,92 @@ impl PlayerController {
             self.font_database.clone(),
             self.preferences.clone(),
             self.file_picker.clone(),
-        ));
+        );
+        self.tabs.push(TabSession {
+            tab_id,
+            bot: bot.clone(),
+            active,
+        });
+        self.active_index = self.tabs.len() - 1;
+        (tab_id, bot)
+    }
+
+    /// Spawns a new independent account tab using the initial launch options & host SWF.
+    pub fn create_new_tab(
+        &mut self,
+        movie_view: MovieView,
+    ) -> Option<(u64, Arc<grimlite_bot::Bot>)> {
+        let opt = self.last_opt.clone()?;
+        let content = self.last_content.clone()?;
+        Some(self.create(&opt, &content, movie_view))
+    }
+
+    pub fn switch_tab(&mut self, tab_id: u64) -> bool {
+        if let Some(idx) = self.tabs.iter().position(|t| t.tab_id == tab_id) {
+            self.active_index = idx;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Closes `tab_id` (refusing to close the last remaining tab) and returns the new active tab ID.
+    pub fn close_tab(&mut self, tab_id: u64) -> Option<u64> {
+        if self.tabs.len() <= 1 {
+            return None;
+        }
+        let idx = self.tabs.iter().position(|t| t.tab_id == tab_id)?;
+        let removed = self.tabs.remove(idx);
+        removed.bot.stop_bot();
+        removed.bot.auto_attack.stop(removed.bot.clone());
+        removed.bot.maid.stop(&removed.bot);
+        drop(removed);
+
+        if self.active_index >= self.tabs.len() {
+            self.active_index = self.tabs.len() - 1;
+        }
+        Some(self.tabs[self.active_index].tab_id)
     }
 
     pub fn destroy(&mut self) {
-        self.player = None;
+        for tab in self.tabs.drain(..) {
+            tab.bot.stop_bot();
+            tab.bot.auto_attack.stop(tab.bot.clone());
+            tab.bot.maid.stop(&tab.bot);
+        }
+        self.active_index = 0;
     }
 
     pub fn get(&self) -> Option<MutexGuard<'_, Player>> {
-        match &self.player {
-            None => None,
-            // We don't want to return None when the lock fails to grab as that's a fatal error, not a lack of player
-            Some(player) => Some(
-                player
+        self.tabs.get(self.active_index).map(|tab| {
+            tab.active
+                .player
+                .try_lock()
+                .expect("Player lock must be available")
+        })
+    }
+
+    pub fn get_by_tab_id(&self, tab_id: u64) -> Option<MutexGuard<'_, Player>> {
+        self.tabs
+            .iter()
+            .find(|t| t.tab_id == tab_id)
+            .map(|tab| {
+                tab.active
                     .player
                     .try_lock()
-                    .expect("Player lock must be available"),
-            ),
+                    .expect("Player lock must be available")
+            })
+    }
+
+    /// Advances all non-active account tabs so their SWF, network sockets, bots, and Maid keep running.
+    pub fn tick_background_tabs(&self, dt: ruffle_core::FloatDuration) {
+        for (idx, tab) in self.tabs.iter().enumerate() {
+            if idx == self.active_index {
+                continue;
+            }
+            if let Ok(mut player) = tab.active.player.try_lock() {
+                player.tick(dt);
+            }
         }
     }
 
@@ -537,12 +630,9 @@ impl PlayerController {
     }
 
     pub fn poll(&self, task: PlayerRunnable) {
-        // Only run the task if it matches our current player;
-        // otherwise it is stale, and should be cancelled (which
-        // happens implicitly on drop).
-        if let Some(player) = &self.player
-            && *task.0.metadata() == player.id
-        {
+        // Route the async future to whichever tab owns its `PlayerId` (active or background).
+        let target_id = *task.0.metadata();
+        if self.tabs.iter().any(|t| t.active.id == target_id) {
             task.0.run();
         }
     }

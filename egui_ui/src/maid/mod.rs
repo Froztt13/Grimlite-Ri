@@ -435,7 +435,7 @@ impl MaidWindow {
                     .add_sized(
                         [w, 20.0],
                         TextEdit::singleline(&mut cfg.attack_priority_monster)
-                            .hint_text("Monster1, id.2, Monster2"),
+                            .hint_text("Monster1, id:2, Monster2"),
                     )
                     .changed();
             });

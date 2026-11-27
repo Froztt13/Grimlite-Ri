@@ -672,31 +672,34 @@ fn get_aura_value(flash: &Flash, aura_name: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
-fn is_monster_available(flash: &Flash, spec: &str) -> bool {
+fn parse_mon_map_id(spec: &str) -> Option<&str> {
     let trimmed = spec.trim();
-    if let Some(id) = trimmed
-        .strip_prefix("id.")
+    trimmed
+        .strip_prefix("id:")
+        .or_else(|| trimmed.strip_prefix("ID:"))
+        .or_else(|| trimmed.strip_prefix("id."))
         .or_else(|| trimmed.strip_prefix("ID."))
-    {
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn is_monster_available(flash: &Flash, spec: &str) -> bool {
+    if let Some(id) = parse_mon_map_id(spec) {
         flash
-            .call_bool("IsMonsterAvailableByMonMapID", &[FlashArg::from(id.trim())])
+            .call_bool("IsMonsterAvailableByMonMapID", &[FlashArg::from(id)])
             .unwrap_or(false)
     } else {
         flash
-            .call_bool("IsMonsterAvailable", &[FlashArg::from(trimmed)])
+            .call_bool("IsMonsterAvailable", &[FlashArg::from(spec.trim())])
             .unwrap_or(false)
     }
 }
 
 fn attack_target_spec(flash: &Flash, spec: &str) {
-    let trimmed = spec.trim();
-    if let Some(id) = trimmed
-        .strip_prefix("id.")
-        .or_else(|| trimmed.strip_prefix("ID."))
-    {
-        let _ = flash.call_str("AttackMonsterByMonMapId", &[FlashArg::from(id.trim())]);
+    if let Some(id) = parse_mon_map_id(spec) {
+        let _ = flash.call_str("AttackMonsterByMonMapId", &[FlashArg::from(id)]);
     } else {
-        let _ = flash.call_str("AttackMonster", &[FlashArg::from(trimmed)]);
+        let _ = flash.call_str("AttackMonster", &[FlashArg::from(spec.trim())]);
     }
 }
 
@@ -720,7 +723,7 @@ mod tests {
             "SkillDelay": 150,
             "SafeSkillHP": 65,
             "SpecialAct": 5,
-            "UltraBossExtra": 8,
+            "UltraBossExtra": 7,
             "AntiCounter": true,
             "CopyWalk": true,
             "AttackPriority": true,
@@ -738,6 +741,7 @@ mod tests {
         assert!(cfg.special_anims);
         assert_eq!(cfg.stop_failed_goto_limit, 5);
         assert_eq!(cfg.ultra_boss_mode(), UltraBossMode::GramielL1);
+        assert_eq!(UltraBossMode::AutoPotion.as_index(), 11);
         assert!(cfg.ultra_boss_mode().uses_enrage());
         assert_eq!(cfg.parsed_attack_priority(), vec!["id.2", "Ultra Gramiel"]);
 

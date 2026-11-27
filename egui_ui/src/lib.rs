@@ -18,9 +18,138 @@ use grimlite_bot::host::FlashArg;
 use grimlite_bot::options::BotOptions;
 use std::sync::Arc;
 
+pub const TAB_BAR_HEIGHT: f32 = 26.0;
 pub const NAV_BAR_HEIGHT: f32 = 34.0;
 const APP_ICON_RGBA: &[u8] = include_bytes!("../assets/grimlite-icon-64.rgba");
 const GITHUB_URL: &str = "https://github.com/Froztt13/Grimlite-Ri";
+
+/// Lightweight metadata for rendering a single account tab in the desktop multi-tab bar.
+#[derive(Clone, Debug)]
+pub struct TabDescriptor {
+    pub id: u64,
+    pub label: String,
+    pub logged_in: bool,
+    pub bot_running: bool,
+}
+
+/// User interaction returned by [`show_tab_bar`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabBarAction {
+    None,
+    Switch(u64),
+    NewTab,
+    Close(u64),
+}
+
+/// Renders the compact browser-style account tab bar above the main Grimlite navbar.
+pub fn show_tab_bar(egui_ui: &mut Ui, tabs: &[TabDescriptor], active_id: u64) -> TabBarAction {
+    let mut action = TabBarAction::None;
+    let can_close = tabs.len() > 1;
+
+    Panel::top("grimlite_tab_bar")
+        .exact_size(TAB_BAR_HEIGHT)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::Palette::BG_INPUT)
+                .inner_margin(egui::Margin::symmetric(6, 2))
+                .stroke(egui::Stroke::new(1.0, theme::Palette::BORDER_SUBTLE)),
+        )
+        .show(egui_ui, |ui| {
+            ui.horizontal_centered(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+
+                for tab in tabs {
+                    let is_active = tab.id == active_id;
+                    let fill = if is_active {
+                        theme::Palette::BG_SURFACE
+                    } else {
+                        Color32::TRANSPARENT
+                    };
+                    let stroke = if is_active {
+                        egui::Stroke::new(1.0, theme::Palette::BORDER_CONTROL)
+                    } else {
+                        egui::Stroke::NONE
+                    };
+
+                    egui::Frame::new()
+                        .fill(fill)
+                        .stroke(stroke)
+                        .corner_radius(egui::CornerRadius::same(4))
+                        .inner_margin(egui::Margin::symmetric(6, 1))
+                        .show(ui, |ui| {
+                            ui.horizontal_centered(|ui| {
+                                ui.spacing_mut().item_spacing.x = 5.0;
+
+                                // Status indicator dot
+                                let dot_color = if tab.bot_running {
+                                    theme::Palette::WARNING
+                                } else if tab.logged_in {
+                                    theme::Palette::SUCCESS
+                                } else {
+                                    theme::Palette::TEXT_MUTED
+                                };
+                                let (rect, _) = ui.allocate_exact_size(
+                                    egui::vec2(7.0, 7.0),
+                                    egui::Sense::hover(),
+                                );
+                                ui.painter()
+                                    .circle_filled(rect.center(), 3.2, dot_color);
+
+                                let text = if is_active {
+                                    RichText::new(&tab.label)
+                                        .size(11.5)
+                                        .strong()
+                                        .color(Color32::WHITE)
+                                } else {
+                                    RichText::new(&tab.label)
+                                        .size(11.5)
+                                        .color(theme::Palette::TEXT_MUTED)
+                                };
+                                if ui
+                                    .add(egui::Label::new(text).sense(egui::Sense::click()))
+                                    .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                    .clicked()
+                                    && !is_active
+                                {
+                                    action = TabBarAction::Switch(tab.id);
+                                }
+
+                                if can_close {
+                                    let close = ui
+                                        .add(
+                                            egui::Label::new(
+                                                RichText::new("×")
+                                                    .size(12.0)
+                                                    .color(theme::Palette::TEXT_MUTED),
+                                            )
+                                            .sense(egui::Sense::click()),
+                                        )
+                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
+                                        .on_hover_text("Close account tab");
+                                    if close.clicked() {
+                                        action = TabBarAction::Close(tab.id);
+                                    }
+                                }
+                            });
+                        });
+                }
+
+                // "+ New" tab button
+                if ui
+                    .add_sized(
+                        [22.0, 19.0],
+                        egui::Button::new(RichText::new("+").strong().size(13.0)),
+                    )
+                    .on_hover_text("Open new account tab")
+                    .clicked()
+                {
+                    action = TabBarAction::NewTab;
+                }
+            });
+        });
+
+    action
+}
 
 const PADS: &[&str] = &[
     "Center", "Spawn", "Left", "Right", "Top", "Bottom", "Up", "Down",

@@ -1,14 +1,6 @@
 //! Grimlite Ri application state and embedded host SWF extraction.
 
-use grimlite_bot::Bot;
 use std::path::PathBuf;
-use std::sync::{Arc, OnceLock};
-
-static BOT: OnceLock<Arc<Bot>> = OnceLock::new();
-
-pub fn bot() -> Arc<Bot> {
-    BOT.get_or_init(Bot::new).clone()
-}
 
 pub fn data_dir() -> PathBuf {
     dirs::data_dir()
