@@ -419,43 +419,73 @@ impl GrimliteUi {
     fn show_options_window(&mut self, ctx: &Context) {
         let mut open = self.show_options;
         let mut changed = false;
-        show_detached_window(
+        show_detached_window_sized(
             ctx,
             "grimlite_options",
             "Game Options",
-            [320.0, 280.0],
+            [295.0, 215.0],
+            Some([275.0, 200.0]),
             &mut open,
             |ui| {
-                changed |= ui
-                    .checkbox(&mut self.options.infinite_range, "Infinite Attack Range")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.options.provoke_monsters, "Provoke Monsters")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.options.enemy_magnet, "Enemy Magnet")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.options.lag_killer, "Lag Killer (Hide World)")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.options.disable_animations, "Disable Animations")
-                    .changed();
-                changed |= ui
-                    .checkbox(&mut self.options.skip_cutscenes, "Skip Cutscenes")
-                    .changed();
+                ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                ui.spacing_mut().button_padding = egui::vec2(5.0, 2.0);
+                ui.spacing_mut().interact_size.y = 20.0;
 
-                ui.separator();
-                if ui
-                    .add(Slider::new(&mut self.options.walk_speed, 4..=40).text("Walk Speed"))
-                    .changed()
-                {
-                    self.options.walk_speed_enabled = self.options.walk_speed != 8;
-                    changed = true;
-                }
-                changed |= ui
-                    .add(Slider::new(&mut self.options.fps, 10..=60).text("Stage FPS"))
-                    .changed();
+                theme::card(ui, "Gameplay", |ui| {
+                    ui.columns(2, |cols| {
+                        cols[0].spacing_mut().item_spacing.y = 4.0;
+                        cols[1].spacing_mut().item_spacing.y = 4.0;
+                        changed |= cols[0]
+                            .checkbox(&mut self.options.infinite_range, "Infinite Range")
+                            .changed();
+                        changed |= cols[0]
+                            .checkbox(&mut self.options.enemy_magnet, "Enemy Magnet")
+                            .changed();
+                        changed |= cols[0]
+                            .checkbox(&mut self.options.skip_cutscenes, "Skip Cutscenes")
+                            .changed();
+                        changed |= cols[0]
+                            .checkbox(&mut self.options.anti_counter, "Anti Counter")
+                            .changed();
+
+                        changed |= cols[1]
+                            .checkbox(&mut self.options.provoke_monsters, "Provoke Monsters")
+                            .changed();
+                        changed |= cols[1]
+                            .checkbox(&mut self.options.lag_killer, "Lag Killer")
+                            .changed();
+                        changed |= cols[1]
+                            .checkbox(&mut self.options.hide_players, "Hide Players")
+                            .changed();
+                    });
+                });
+
+                ui.add_space(5.0);
+
+                theme::card(ui, "Speed & FPS", |ui| {
+                    egui::Grid::new("game_opts_sliders_grid")
+                        .num_columns(2)
+                        .spacing([8.0, 4.0])
+                        .show(ui, |ui| {
+                            ui.label("Walk Speed");
+                            ui.horizontal(|ui| {
+                                if ui
+                                    .add(Slider::new(&mut self.options.walk_speed, 4..=40))
+                                    .changed()
+                                {
+                                    self.options.walk_speed_enabled = self.options.walk_speed != 8;
+                                    changed = true;
+                                }
+                            });
+                            ui.end_row();
+
+                            ui.label("Stage FPS");
+                            changed |= ui
+                                .add(Slider::new(&mut self.options.fps, 10..=60))
+                                .changed();
+                            ui.end_row();
+                        });
+                });
             },
         );
         if changed {

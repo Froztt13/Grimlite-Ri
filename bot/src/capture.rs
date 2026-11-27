@@ -86,7 +86,7 @@ impl Default for CaptureProxy {
     fn default() -> Self {
         Self {
             running: AtomicBool::new(false),
-            logging: AtomicBool::new(true),
+            logging: AtomicBool::new(false),
             interceptors: RwLock::new(Vec::new()),
             sink: RwLock::new(None),
             log: Mutex::new(VecDeque::new()),
@@ -347,6 +347,7 @@ mod tests {
     fn stream_splits_and_blocks_packets() {
         let proxy = CaptureProxy::default();
         proxy.start();
+        proxy.set_logging(true);
         proxy.add_interceptor(Arc::new(DropContains("secret")));
 
         let mut stream = Stream::default();

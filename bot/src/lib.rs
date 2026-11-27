@@ -214,6 +214,12 @@ impl Bot {
         self.spammer.start(self.capture.clone(), self.logs.clone());
     }
 
+    pub fn start_spammer_queue(&self, packets: Vec<crate::spammer::QueuedPacket>, delay_ms: u64) {
+        self.spammer.set_queued_packets(packets);
+        self.spammer.set_delay_ms(delay_ms);
+        self.spammer.start(self.capture.clone(), self.logs.clone());
+    }
+
     pub fn stop_spammer(&self) {
         self.spammer.stop();
     }

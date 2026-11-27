@@ -15,7 +15,6 @@ pub struct CosmeticsWindow {
     username: String,
     guild: String,
     level: String,
-    fps: i32,
     gender_swapped: bool,
 }
 
@@ -28,7 +27,6 @@ impl CosmeticsWindow {
             username: String::new(),
             guild: String::new(),
             level: String::new(),
-            fps: 30,
             gender_swapped: false,
         }
     }
@@ -169,35 +167,21 @@ impl CosmeticsWindow {
                 }
             });
 
-            // Level + FPS compact split row
+            // Level
             ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 4.0;
+                let input_w = (ui.available_width() - btn_w - 5.0).max(80.0);
                 ui.add(
                     TextEdit::singleline(&mut self.level)
-                        .hint_text("Lvl")
-                        .desired_width(44.0),
+                        .hint_text("Level")
+                        .desired_width(input_w),
                 );
-                if theme::primary_button(ui, "Set", [38.0, 21.0]).clicked()
+                if theme::primary_button(ui, "Set", [btn_w, 21.0]).clicked()
                     && let Ok(lvl) = self.level.trim().parse::<i32>()
                 {
                     let pkt = format!(
                         r#"{{"t":"xt","b":{{"r":-1,"o":{{"cmd":"levelUp","intExpToLevel":"2000","intLevel":{lvl}}}}}}}"#
                     );
                     let _ = self.bot.capture.send_to_client(&pkt);
-                }
-
-                ui.add_space(6.0);
-                theme::num_input(ui, &mut self.fps, 1..=60, 44.0);
-                ui.label(RichText::new("FPS").small().weak());
-                if theme::primary_button(ui, "Set", [ui.available_width().max(38.0), 21.0])
-                    .clicked()
-                {
-                    let fps = self.fps.clamp(1, 60);
-                    let mut opts = self.bot.options.get();
-                    opts.fps = fps;
-                    self.bot.apply_options(opts);
-                    self.bot
-                        .spawn_flash_action("setFPS", vec![FlashArg::from(fps)]);
                 }
             });
         });

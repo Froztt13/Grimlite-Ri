@@ -151,6 +151,7 @@ impl BotManagerWindow {
                             ui.checkbox(&mut self.clear_all_lists, "All");
                         },
                     );
+                    ui.add_space(4.0);
 
                     let len = self.current_list_len(cfg);
                     let can_remove = self.selected.iter().any(|&i| i < len);
@@ -629,7 +630,6 @@ impl BotManagerWindow {
             cfg.commands.push(cmd);
         }
     }
-
 }
 
 /// Command syntax colors matching Grimlite-Li `config.cfg` / `BotManager.lstCommands_DrawItem`.

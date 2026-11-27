@@ -350,7 +350,8 @@ pub fn list_box(ui: &mut Ui, height: Option<f32>, add_contents: impl FnOnce(&mut
         });
 }
 
-/// Full-width selectable list row with custom background fill and optional left indent.
+/// Full-width list row with custom background fill and optional left indent.
+/// Does NOT overlay a click layer on top of child widgets so inner buttons/checkboxes work cleanly.
 pub fn list_row_with_bg(
     ui: &mut Ui,
     bg: Color32,
@@ -371,11 +372,9 @@ pub fn list_row_with_bg(
             add_contents(ui);
         })
         .response
-        .interact(egui::Sense::click())
-        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Reusable full-width selectable list row with odd-even zebra striping and selected highlight.
+/// Reusable full-width list row with odd-even zebra striping and selected highlight.
 pub fn list_row(
     ui: &mut Ui,
     row_idx: usize,
@@ -411,6 +410,8 @@ pub fn list_text_row(
     list_row(ui, row_idx, selected, indent_px, |ui| {
         ui.add(egui::Label::new(rt).selectable(false));
     })
+    .interact(egui::Sense::click())
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Reusable ON/OFF toggle button with crisp green active state.
