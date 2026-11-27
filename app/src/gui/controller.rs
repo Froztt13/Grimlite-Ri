@@ -452,11 +452,12 @@ impl GuiController {
         tracing::info!("Opening {}", content_descriptor.describe());
 
         self.close_movie(player);
+        let h_offset = self.height_offset() as u32;
         let movie_view = MovieView::new(
             self.movie_view_renderer.clone(),
             &self.descriptors.device,
             crate::mugetsu::drawn_len(self.size.width),
-            crate::mugetsu::drawn_len(self.size.height),
+            crate::mugetsu::drawn_len(self.size.height.saturating_sub(h_offset)),
             #[cfg(feature = "tracy_images")]
             self.tracy_frame_captures.clone(),
         );
@@ -484,13 +485,22 @@ impl GuiController {
         );
     }
 
+    fn clear_egui_focus(&self) {
+        self.egui_winit.egui_ctx().memory_mut(|mem| {
+            if let Some(focused) = mem.focused() {
+                mem.surrender_focus(focused);
+            }
+        });
+    }
+
     /// Spawns a new independent account tab and switches to it.
     pub fn create_new_tab(&mut self, player: &mut PlayerController) {
+        let h_offset = self.height_offset() as u32;
         let movie_view = MovieView::new(
             self.movie_view_renderer.clone(),
             &self.descriptors.device,
             crate::mugetsu::drawn_len(self.size.width),
-            crate::mugetsu::drawn_len(self.size.height),
+            crate::mugetsu::drawn_len(self.size.height.saturating_sub(h_offset)),
             #[cfg(feature = "tracy_images")]
             self.tracy_frame_captures.clone(),
         );
@@ -507,6 +517,7 @@ impl GuiController {
                 },
             );
         }
+        self.clear_egui_focus();
         self.sync_active_viewport_dimensions(player);
         self.gui.register_tab(tab_id, bot);
         self.movie_binds = None;
@@ -516,6 +527,7 @@ impl GuiController {
     /// Switches the active visible account tab.
     pub fn switch_tab(&mut self, player: &mut PlayerController, tab_id: u64) {
         if player.switch_tab(tab_id) {
+            self.clear_egui_focus();
             self.gui.set_active_tab(tab_id);
             self.sync_active_viewport_dimensions(player);
             self.movie_binds = None;
@@ -529,6 +541,7 @@ impl GuiController {
     /// Closes an account tab (if more than one exists) and activates its neighbor.
     pub fn close_tab(&mut self, player: &mut PlayerController, tab_id: u64) {
         if let Some(new_active) = player.close_tab(tab_id) {
+            self.clear_egui_focus();
             self.gui.remove_tab(tab_id);
             self.gui.set_active_tab(new_active);
             self.sync_active_viewport_dimensions(player);

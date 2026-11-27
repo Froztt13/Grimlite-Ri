@@ -482,6 +482,8 @@ pub struct PlayerController {
     next_tab_id: u64,
     last_opt: Option<LaunchOptions>,
     last_content: Option<ContentDescriptor>,
+    cursor_in_window: Cell<bool>,
+    window_focused: Cell<bool>,
     event_loop: EventLoopProxy<RuffleEvent>,
     window: Arc<Window>,
     descriptors: Arc<Descriptors>,
@@ -505,6 +507,8 @@ impl PlayerController {
             next_tab_id: 1,
             last_opt: None,
             last_content: None,
+            cursor_in_window: Cell::new(true),
+            window_focused: Cell::new(true),
             event_loop,
             window,
             descriptors,
@@ -512,6 +516,18 @@ impl PlayerController {
             preferences,
             file_picker,
         }
+    }
+
+    pub fn set_cursor_in_window(&self, in_window: bool) {
+        self.cursor_in_window.set(in_window);
+    }
+
+    pub fn cursor_in_window(&self) -> bool {
+        self.cursor_in_window.get()
+    }
+
+    pub fn set_window_focused(&self, focused: bool) {
+        self.window_focused.set(focused);
     }
 
     pub fn create(
@@ -594,8 +610,11 @@ impl PlayerController {
     }
 
     /// Parks mouse off-stage (avoiding expensive display-list `run_mouse_pick` hit-testing on hidden
-    /// tabs) and mutes background tab audio, restoring audio on the active tab.
+    /// tabs) and mutes background tab audio, while restoring `mouse_in_stage`, stage focus, and audio
+    /// on the newly active tab so Flash hit-testing works immediately without leaving/re-entering the window.
     fn sync_tab_activity_states(&self) {
+        let cursor_in = self.cursor_in_window.get();
+        let focused = self.window_focused.get();
         for (idx, tab) in self.tabs.iter().enumerate() {
             let is_active = idx == self.active_index;
             if let Some(mut p) = TabPlayerGuard::try_lock(&tab.active.player, &tab.segments) {
@@ -603,10 +622,15 @@ impl PlayerController {
                     if let Some(vol) = tab.saved_volume.take() {
                         p.set_volume(vol);
                     }
+                    p.set_mouse_in_stage(cursor_in);
+                    if focused {
+                        p.handle_event(PlayerEvent::FocusGained);
+                    }
                 } else {
                     if p.mouse_in_stage() {
                         p.set_mouse_in_stage(false);
                         p.handle_event(PlayerEvent::MouseLeave);
+                        p.handle_event(PlayerEvent::FocusLost);
                     }
                     if tab.saved_volume.get().is_none() {
                         tab.saved_volume.set(Some(p.volume()));

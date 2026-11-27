@@ -1033,8 +1033,17 @@ mod runtime {
             *needs_game_render = true;
         }
 
+        let prev_active_idx = *active_idx;
+        let mut tab_switched = false;
         match tab_action {
             TabBarAction::NewTab => {
+                if let Some(old_tab) = tabs.get_mut(prev_active_idx)
+                    && let Some(mut p) = TabPlayerGuard::try_lock(&old_tab.player, &old_tab.segments)
+                {
+                    p.set_mouse_in_stage(false);
+                    p.handle_event(PlayerEvent::MouseLeave);
+                    p.handle_event(PlayerEvent::FocusLost);
+                }
                 let tab = spawn_tab(
                     app,
                     data_dir,
@@ -1054,11 +1063,23 @@ mod runtime {
                 tabs.push(tab);
                 *active_idx = tabs.len() - 1;
                 *needs_game_render = true;
+                tab_switched = true;
             }
             TabBarAction::Switch(id) => {
-                if let Some(idx) = tabs.iter().position(|t| t.id == id) {
+                if let Some(idx) = tabs.iter().position(|t| t.id == id)
+                    && idx != prev_active_idx
+                {
+                    if let Some(old_tab) = tabs.get_mut(prev_active_idx)
+                        && let Some(mut p) =
+                            TabPlayerGuard::try_lock(&old_tab.player, &old_tab.segments)
+                    {
+                        p.set_mouse_in_stage(false);
+                        p.handle_event(PlayerEvent::MouseLeave);
+                        p.handle_event(PlayerEvent::FocusLost);
+                    }
                     *active_idx = idx;
                     *needs_game_render = true;
+                    tab_switched = true;
                 }
             }
             TabBarAction::Close(id) if tabs.len() > 1 => {
@@ -1071,9 +1092,97 @@ mod runtime {
                         *active_idx = tabs.len() - 1;
                     }
                     *needs_game_render = true;
+                    tab_switched = true;
                 }
             }
             _ => {}
+        }
+
+        if tab_switched {
+            egui_ctx.memory_mut(|mem| {
+                if let Some(focused) = mem.focused() {
+                    mem.surrender_focus(focused);
+                }
+            });
+            if *egui_ime_active || kb_open.swap(false, Ordering::AcqRel) {
+                *egui_ime_active = false;
+                kb_draft.clear();
+                *kb_manual_mask = None;
+                hide_ime(app, ime_reset_flag);
+            }
+            if let Some(active_tab) = tabs.get_mut(*active_idx) {
+                resize_tab_viewport(
+                    active_tab,
+                    cfg.width,
+                    cfg.height,
+                    scale_factor,
+                    *rail_collapsed,
+                );
+                if let Some(mut p) =
+                    TabPlayerGuard::try_lock(&active_tab.player, &active_tab.segments)
+                {
+                    p.set_mouse_in_stage(true);
+                    p.handle_event(PlayerEvent::FocusGained);
+                }
+            }
+
+            // Re-run egui immediately for the newly active tab so `egui_ctx.layer_id_at(...)`
+            // drops the previous tab's flyout/window rectangles before the next touch arrives.
+            let new_active_id = tabs.get(*active_idx).map(|t| t.id).unwrap_or(0);
+            let new_descriptors_ui: Vec<TabDescriptor> = tabs
+                .iter()
+                .map(|t| {
+                    let snap = t.bot.player_snapshot();
+                    let label = if snap.logged_in && !snap.username.trim().is_empty() {
+                        snap.username
+                    } else {
+                        format!("Account #{}", t.id)
+                    };
+                    TabDescriptor {
+                        id: t.id,
+                        label,
+                        logged_in: snap.logged_in,
+                        bot_running: t.bot.runner.is_running()
+                            || t.bot.auto_attack.is_running()
+                            || t.bot.maid.is_running(),
+                    }
+                })
+                .collect();
+            let mut switched_input = RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    Pos2::ZERO,
+                    egui::vec2(
+                        cfg.width as f32 / scale_factor,
+                        cfg.height as f32 / scale_factor,
+                    ),
+                )),
+                time: Some(started.elapsed().as_secs_f64()),
+                max_texture_side: Some(desc.limits.max_texture_dimension_2d as usize),
+                ..Default::default()
+            };
+            if let Some(vp) = switched_input.viewports.get_mut(&egui::ViewportId::ROOT) {
+                vp.native_pixels_per_point = Some(scale_factor);
+            }
+            let switched_output = egui_ctx.run_ui(switched_input, |ui| {
+                if let Some(tab) = tabs.get_mut(*active_idx) {
+                    let _ = tab.ui.show_mobile(
+                        egui_ctx,
+                        ui,
+                        &new_descriptors_ui,
+                        new_active_id,
+                        rail_collapsed,
+                    );
+                }
+            });
+            full_output.textures_delta.append(switched_output.textures_delta);
+            full_output.shapes = switched_output.shapes;
+            full_output.pixels_per_point = switched_output.pixels_per_point;
+            full_output.platform_output = switched_output.platform_output;
+            full_output.viewport_output = switched_output.viewport_output;
+            *ui_due = full_output
+                .viewport_output
+                .get(&egui::ViewportId::ROOT)
+                .and_then(|vp| Instant::now().checked_add(vp.repaint_delay));
         }
 
         let clipped = egui_ctx.tessellate(full_output.shapes, full_output.pixels_per_point);

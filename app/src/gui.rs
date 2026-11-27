@@ -136,10 +136,12 @@ impl RuffleGui {
             self.tab_bots.push((tab_id, bot));
         }
         self.active_tab_id = tab_id;
+        self.context_menu = None;
     }
 
     pub fn set_active_tab(&mut self, tab_id: u64) {
         self.active_tab_id = tab_id;
+        self.context_menu = None;
     }
 
     pub fn remove_tab(&mut self, tab_id: u64) {

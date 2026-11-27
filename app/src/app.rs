@@ -1030,7 +1030,25 @@ impl MainWindow {
             }
             self.gui.settle_present();
         }
+        match &event {
+            WindowEvent::CursorEntered { .. } => {
+                self.player.set_cursor_in_window(true);
+            }
+            WindowEvent::CursorLeft { .. } if self.test_pointer.is_none() => {
+                self.player.set_cursor_in_window(false);
+            }
+            WindowEvent::Focused(focused) => {
+                self.player.set_window_focused(*focused);
+            }
+            _ => {}
+        }
         if self.gui.handle_event(&event) {
+            if let WindowEvent::CursorMoved { position, .. } = event
+                && self.test_pointer.is_none()
+            {
+                self.player.set_cursor_in_window(true);
+                self.mouse_pos = position;
+            }
             // Event consumed by GUI.
             return;
         }
@@ -1091,6 +1109,7 @@ impl MainWindow {
                     return;
                 }
 
+                self.player.set_cursor_in_window(true);
                 self.mouse_pos = position;
                 self.mouse_move_pending = true;
                 // Test switch: hit-test every mouse move, like stock Ruffle.
@@ -1124,6 +1143,13 @@ impl MainWindow {
             WindowEvent::MouseInput { button, state, .. } => {
                 if self.gui.is_context_menu_visible() {
                     return;
+                }
+
+                self.player.set_cursor_in_window(true);
+                if let Some(mut player) = self.player.get()
+                    && !player.mouse_in_stage()
+                {
+                    player.set_mouse_in_stage(true);
                 }
 
                 // Keep MouseMove -> MouseDown ordering and an up-to-date hover target.
@@ -1990,6 +2016,12 @@ impl MainWindow {
         if !std::mem::take(&mut self.mouse_move_pending) {
             return;
         }
+        if self.player.cursor_in_window()
+            && let Some(mut player) = self.player.get()
+            && !player.mouse_in_stage()
+        {
+            player.set_mouse_in_stage(true);
+        }
         let (x, y) = self.gui.window_to_movie_position(self.mouse_pos);
         self.player.handle_event(PlayerEvent::MouseMove { x, y });
         self.check_redraw();
@@ -2300,18 +2332,32 @@ impl ApplicationHandler<RuffleEvent> for App {
             (None, RuffleEvent::GrimliteFlashCall(_, req)) => {
                 grimlite_frontend::ruffle_host::answer_flash_call(None, req);
             }
-            (Some(main_window), RuffleEvent::GrimliteTabAction(action)) => match action {
-                grimlite_egui::TabBarAction::NewTab => {
-                    main_window.gui.create_new_tab(&mut main_window.player);
+            (Some(main_window), RuffleEvent::GrimliteTabAction(action)) => {
+                let changed = match action {
+                    grimlite_egui::TabBarAction::NewTab => {
+                        main_window.gui.create_new_tab(&mut main_window.player);
+                        true
+                    }
+                    grimlite_egui::TabBarAction::Switch(tab_id) => {
+                        main_window.gui.switch_tab(&mut main_window.player, tab_id);
+                        true
+                    }
+                    grimlite_egui::TabBarAction::Close(tab_id) => {
+                        main_window.gui.close_tab(&mut main_window.player, tab_id);
+                        true
+                    }
+                    grimlite_egui::TabBarAction::None => false,
+                };
+                if changed {
+                    main_window.frame_since_render = true;
+                    if main_window.player.cursor_in_window()
+                        && !main_window.gui.is_context_menu_visible()
+                    {
+                        main_window.mouse_move_pending = true;
+                        main_window.flush_mouse_move();
+                    }
                 }
-                grimlite_egui::TabBarAction::Switch(tab_id) => {
-                    main_window.gui.switch_tab(&mut main_window.player, tab_id);
-                }
-                grimlite_egui::TabBarAction::Close(tab_id) => {
-                    main_window.gui.close_tab(&mut main_window.player, tab_id);
-                }
-                grimlite_egui::TabBarAction::None => {}
-            },
+            }
 
             (Some(main_window), RuffleEvent::EnterFullScreen) => {
                 if let Some(mut player) = main_window.player.get()
