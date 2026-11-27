@@ -98,7 +98,9 @@ pub fn apply(ctx: &Context) {
     visuals.widgets.open.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     visuals.widgets.open.corner_radius = CornerRadius::same(4);
 
-    ctx.set_visuals(visuals);
+    ctx.set_theme(egui::Theme::Dark);
+    ctx.set_visuals_of(egui::Theme::Dark, visuals.clone());
+    ctx.set_visuals_of(egui::Theme::Light, visuals);
 }
 
 /// Framed elevated card container with a subtle muted title.
