@@ -11,3 +11,4 @@ workspace = true
 [dependencies]
 grimlite_bot = { path = "../bot" }
 egui = { workspace = true }
+serde_json = { workspace = true }
