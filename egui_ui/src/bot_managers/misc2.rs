@@ -427,6 +427,15 @@ fn statement_catalog() -> Vec<StatementMeta> {
             Some("Quantity"),
             "1",
         ),
+        m("Item", S::Equipped, "Is equipped", Some("Item name"), None, ""),
+        m(
+            "Item",
+            S::NotEquipped,
+            "Is not equipped",
+            Some("Item name"),
+            None,
+            "",
+        ),
         // Map
         m("Map", S::MapIs, "Map is", Some("Map name"), None, ""),
         m("Map", S::MapIsNot, "Map is not", Some("Map name"), None, ""),

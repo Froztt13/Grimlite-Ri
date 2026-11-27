@@ -741,6 +741,8 @@ pub fn all_statement_kinds() -> Vec<StatementKind> {
         StatementKind::NotInBank,
         StatementKind::InBankOrInvent,
         StatementKind::NotInBankAndInvent,
+        StatementKind::Equipped,
+        StatementKind::NotEquipped,
         StatementKind::MapIs,
         StatementKind::MapIsNot,
         StatementKind::CellIs,

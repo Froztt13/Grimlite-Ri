@@ -299,6 +299,8 @@ pub enum StatementKind {
     NotInBank,
     InBankOrInvent,
     NotInBankAndInvent,
+    Equipped,
+    NotEquipped,
     MapIs,
     MapIsNot,
     CellIs,
@@ -1327,6 +1329,8 @@ fn parse_statement_kind(name: &str) -> Option<StatementKind> {
         "CmdNotInBank" => S::NotInBank,
         "CmdInBankOrInvent" => S::InBankOrInvent,
         "CmdNotInBankAndInvent" => S::NotInBankAndInvent,
+        "CmdEquipped" => S::Equipped,
+        "CmdNotEquipped" => S::NotEquipped,
         "CmdMapIs" => S::MapIs,
         "CmdMapIsNot" => S::MapIsNot,
         "CmdCellIs" => S::CellIs,
@@ -1402,5 +1406,37 @@ mod tests {
         let reparsed = BotConfig::from_gbot_json(&exported).expect("reparse .gbot");
         assert_eq!(reparsed.commands.len(), 5);
         assert_eq!(reparsed.drops, vec!["Frogzard Tooth"]);
+    }
+
+    #[test]
+    fn parses_equipped_statements() {
+        let sample = r#"{
+            "$type": "Grimoire.Botting.Configuration, Grimoire",
+            "Commands": {
+                "$type": "System.Collections.Generic.List`1[[Grimoire.Botting.IBotCommand, Grimoire]], mscorlib",
+                "$values": [
+                    { "$type": "Grimoire.Botting.Commands.Misc.Statements.CmdEquipped, Grimoire", "Value1": "Chaos Avenger", "Value2": "" },
+                    { "$type": "Grimoire.Botting.Commands.Misc.Statements.CmdNotEquipped, Grimoire", "Value1": "Scroll of Life Steal", "Value2": "" }
+                ]
+            }
+        }"#;
+        let cfg = BotConfig::from_gbot_json(sample).expect("parse equipped statements");
+        assert_eq!(cfg.commands.len(), 2);
+        assert!(matches!(
+            &cfg.commands[0],
+            BotCommand::Statement {
+                kind: StatementKind::Equipped,
+                value1,
+                ..
+            } if value1 == "Chaos Avenger"
+        ));
+        assert!(matches!(
+            &cfg.commands[1],
+            BotCommand::Statement {
+                kind: StatementKind::NotEquipped,
+                value1,
+                ..
+            } if value1 == "Scroll of Life Steal"
+        ));
     }
 }

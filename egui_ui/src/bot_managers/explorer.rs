@@ -733,6 +733,8 @@ fn statement_color(kind: &StatementKind) -> Color32 {
         StatementKind::NotInBank => 0xE488FA,
         StatementKind::InBankOrInvent => 0xC8ECA2,
         StatementKind::NotInBankAndInvent => 0xB4BDCE,
+        StatementKind::Equipped => 0xA3E4D7,
+        StatementKind::NotEquipped => 0xF5B7B1,
         StatementKind::MapIs => 0xB981BE,
         StatementKind::MapIsNot => 0xB28DA9,
         StatementKind::CellIs => 0xB6A89F,

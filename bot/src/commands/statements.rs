@@ -53,6 +53,14 @@ pub fn evaluate(ctx: &CommandContext<'_>, kind: &StatementKind, v1: &str, v2: &s
                     .call_bool("hasBankItem", &[FlashArg::from(v1), FlashArg::from(qty)])
                     .unwrap_or(false)
         }
+        StatementKind::Equipped => ctx
+            .flash
+            .call_bool("isEquipped", &[FlashArg::from(v1)])
+            .unwrap_or(false),
+        StatementKind::NotEquipped => !ctx
+            .flash
+            .call_bool("isEquipped", &[FlashArg::from(v1)])
+            .unwrap_or(false),
         StatementKind::MapIs => snap.map.eq_ignore_ascii_case(v1),
         StatementKind::MapIsNot => !snap.map.eq_ignore_ascii_case(v1),
         StatementKind::CellIs => snap.cell.eq_ignore_ascii_case(v1),
