@@ -8,6 +8,7 @@ mod mugetsu_menu;
 mod picker;
 mod prompt;
 mod theme;
+pub mod viewports;
 mod widgets;
 
 pub use controller::GuiController;
@@ -90,6 +91,12 @@ impl RuffleGui {
                     rfd::FileDialog::new()
                         .add_filter("Grimoire Bot", &["gbot", "json"])
                         .pick_file()
+                })),
+                Some(Box::new(|| {
+                    rfd::FileDialog::new()
+                        .add_filter("Grimoire Bot", &["gbot"])
+                        .set_file_name("bot.gbot")
+                        .save_file()
                 })),
             ),
         }

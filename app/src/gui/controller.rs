@@ -246,7 +246,7 @@ impl GuiController {
             size.height,
             window.scale_factor(),
         ));
-        let egui_renderer = egui_wgpu::Renderer::new(
+        let egui_renderer = Arc::new(Mutex::new(egui_wgpu::Renderer::new(
             &descriptors.device,
             surface_format,
             egui_wgpu::RendererOptions {
@@ -255,7 +255,7 @@ impl GuiController {
                 dithering: false,
                 predictable_texture_filtering: false,
             },
-        );
+        )));
         let descriptors = Arc::new(descriptors);
         let gui = RuffleGui::new(
             Arc::downgrade(&window),
@@ -272,13 +272,22 @@ impl GuiController {
 
         egui_extras::install_image_loaders(egui_winit.egui_ctx());
 
+        // Grimlite Ri: enable native multi-viewport so Bot Manager & Tools windows can be
+        // dragged outside the main game window on macOS/Windows/Linux.
+        crate::gui::viewports::install(
+            egui_winit.egui_ctx(),
+            descriptors.clone(),
+            egui_renderer.clone(),
+            surface_format,
+        );
+
         #[cfg(feature = "tracy_images")]
         let tracy_frame_captures = crate::tracy::FrameCapturesHolder::new(&descriptors.device);
 
         Ok(Self {
             descriptors,
             egui_winit,
-            egui_renderer: Arc::new(Mutex::new(egui_renderer)),
+            egui_renderer,
             gui,
             window,
             last_update: Instant::now(),
@@ -489,7 +498,11 @@ impl GuiController {
     /// AQW build: runs the UI on this thread, then draws and presents the window frame: on the
     /// present thread, after the movie's own submit (see `ruffle_render_wgpu::present`), or
     /// here when that's switched off (`present_frame` either way).
-    pub fn render(&mut self, mut player: Option<MutexGuard<Player>>) {
+    pub fn render(
+        &mut self,
+        event_loop: &winit::event_loop::ActiveEventLoop,
+        mut player: Option<MutexGuard<Player>>,
+    ) {
         #[cfg(feature = "tracy_images")]
         if player.is_none() {
             self.tracy_frame_captures
@@ -500,21 +513,23 @@ impl GuiController {
         let show_menu = self.window.fullscreen().is_none() && !self.no_gui;
         let mut counter_shapes = 0;
         let counter_top = self.height_offset();
-        let mut full_output = self.egui_winit.egui_ctx().run_ui(raw_input, |ui| {
-            self.gui.update(
-                self.egui_winit.egui_ctx(),
-                ui,
-                show_menu,
-                player.as_deref_mut(),
-                if show_menu {
-                    MENU_HEIGHT as f64 * self.window.scale_factor()
-                } else {
-                    0.0
-                },
-            );
-            if crate::mugetsu::show_fps() {
-                counter_shapes = fps_counter(ui.ctx(), counter_top);
-            }
+        let mut full_output = crate::gui::viewports::run_frame(event_loop, || {
+            self.egui_winit.egui_ctx().run_ui(raw_input, |ui| {
+                self.gui.update(
+                    self.egui_winit.egui_ctx(),
+                    ui,
+                    show_menu,
+                    player.as_deref_mut(),
+                    if show_menu {
+                        MENU_HEIGHT as f64 * self.window.scale_factor()
+                    } else {
+                        0.0
+                    },
+                );
+                if crate::mugetsu::show_fps() {
+                    counter_shapes = fps_counter(ui.ctx(), counter_top);
+                }
+            })
         });
         // AQW build: the FPS counter (Mugetsu's settings) is redrawn with the movie's frames
         // only, so on its own it isn't UI that wants repaints (see `wants_redraws`).
@@ -674,7 +689,9 @@ impl GuiController {
 
     /// AQW build: whether GUI-only repaints are useful: egui shows something, or is about to.
     pub fn wants_redraws(&self) -> bool {
-        self.ui_visible || self.gui.is_context_menu_visible()
+        self.ui_visible
+            || self.gui.is_context_menu_visible()
+            || crate::gui::viewports::has_open_viewports()
     }
 
     pub fn needs_render(&self) -> bool {

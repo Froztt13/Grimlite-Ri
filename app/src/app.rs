@@ -935,7 +935,7 @@ impl MainWindow {
                     }
                 }
 
-                self.gui.render(player);
+                self.gui.render(event_loop, player);
                 self.perf.presents += 1;
                 self.presents_total += 1;
                 self.count_fps();
@@ -2353,10 +2353,17 @@ impl ApplicationHandler<RuffleEvent> for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
+        window_id: WindowId,
         event: WindowEvent,
     ) {
         enter_runtime!(self);
+
+        if crate::gui::viewports::handle_window_event(window_id, &event) {
+            if let Some(main_window) = &self.main_window {
+                main_window.gui.window().request_redraw();
+            }
+            return;
+        }
 
         if let Some(main_window) = &mut self.main_window {
             main_window.window_event(event_loop, event);
@@ -2400,6 +2407,7 @@ impl ApplicationHandler<RuffleEvent> for App {
         // `MainWindow` needs a tokio context to properly drop.
         {
             enter_runtime!(self);
+            crate::gui::viewports::clear();
             let _ = self.main_window.take();
         }
         // AQW build: how the close divides (a slow one was seen under a heavy load: where).
