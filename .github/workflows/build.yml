@@ -3,12 +3,20 @@ name: Build (macOS & Windows)
 on:
   workflow_dispatch:
     inputs:
+      build_macos:
+        description: "Build macOS (Apple Silicon)"
+        type: boolean
+        default: true
+      build_windows:
+        description: "Build Windows (x64)"
+        type: boolean
+        default: true
       publish_release:
         description: "Publish artifacts to GitHub Release"
         type: boolean
         default: false
       release_tag:
-        description: "Release tag (required only if publish_release is true, e.g. v0.1.0)"
+        description: "Release tag (optional, e.g. v0.1.0)"
         type: string
         default: ""
 
@@ -21,7 +29,8 @@ env:
 jobs:
   build-macos:
     name: macOS (Apple Silicon)
-    runs-on: macos-14
+    if: ${{ inputs.build_macos == true }}
+    runs-on: macos-latest
     steps:
       - name: Checkout repository (with ruffle submodule)
         uses: actions/checkout@v4
@@ -30,6 +39,8 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -67,6 +78,7 @@ jobs:
 
   build-windows:
     name: Windows (x64)
+    if: ${{ inputs.build_windows == true }}
     runs-on: windows-latest
     steps:
       - name: Checkout repository (with ruffle submodule)
@@ -76,6 +88,8 @@ jobs:
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.99.1
 
       - name: Cache Cargo artifacts
         uses: Swatinem/rust-cache@v2
@@ -108,7 +122,7 @@ jobs:
   release:
     name: Publish GitHub Release
     needs: [build-macos, build-windows]
-    if: ${{ inputs.publish_release == true }}
+    if: ${{ always() && inputs.publish_release == true && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') && (inputs.build_macos == true || inputs.build_windows == true) }}
     runs-on: ubuntu-latest
     steps:
       - name: Download all artifacts
