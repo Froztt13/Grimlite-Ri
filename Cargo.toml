@@ -1,5 +1,5 @@
 [workspace]
-members = ["host", "bot", "frontend", "egui_ui", "app"]
+members = ["host", "bot", "frontend", "egui_ui", "app", "headless"]
 default-members = ["app"]
 # `ruffle/` is the muktiarafi/ruffle-aqw submodule (Ruffle + Mugetsu 2.0.0 + Turu patches).
 exclude = ["ruffle"]
@@ -80,6 +80,7 @@ opt-level = 0
 
 [profile.dev]
 panic = "unwind"
+debug = 0
 
 [profile.release]
 panic = "abort"

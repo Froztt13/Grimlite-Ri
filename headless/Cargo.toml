@@ -1,0 +1,24 @@
+[package]
+name = "grimlite-headless"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+grimlite_bot = { path = "../bot" }
+grimlite_frontend = { path = "../frontend" }
+grimlite_egui = { path = "../egui_ui" }
+ruffle_core = { path = "../ruffle/core", features = ["default_compatibility_rules", "lzma"] }
+ruffle_render = { path = "../ruffle/render" }
+ruffle_frontend_utils = { path = "../ruffle/frontend-utils", default-features = false, features = ["navigator", "fs", "native-tls"] }
+async-task = "4.7.1"
+dirs = "6.0"
+eframe = { version = "0.36.1", default-features = false, features = ["default_fonts", "wgpu"] }
+egui = { workspace = true }
+rfd = { workspace = true }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
+url = { workspace = true }
