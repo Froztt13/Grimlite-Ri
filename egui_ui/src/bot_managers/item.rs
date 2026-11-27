@@ -100,18 +100,19 @@ impl BotManagerWindow {
             cols[0].add_space(8.0);
             group_box(&mut cols[0], "Map Item", |ui| {
                 ui.horizontal(|ui| {
-                    ui.add(
-                        TextEdit::singleline(&mut self.map_item_id)
-                            .hint_text("Map Item ID (e.g. 1234)")
-                            .desired_width((ui.available_width() - 96.0).max(60.0)),
-                    );
-                    let rem = ui.available_width().max(88.0);
-                    if theme::primary_button(ui, "+ Map Item", [rem, 22.0]).clicked()
-                        && let Ok(id) = self.map_item_id.trim().parse::<i32>()
-                    {
-                        self.push_command(cfg, BotCommand::MapItem { item_id: id });
-                        dirty = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "+ Map Item", [92.0, 22.0]).clicked()
+                            && let Ok(id) = self.map_item_id.trim().parse::<i32>()
+                        {
+                            self.push_command(cfg, BotCommand::MapItem { item_id: id });
+                            dirty = true;
+                        }
+                        ui.add(
+                            TextEdit::singleline(&mut self.map_item_id)
+                                .hint_text("Map Item ID (e.g. 1234)")
+                                .desired_width(ui.available_width().max(40.0)),
+                        );
+                    });
                 });
             });
 

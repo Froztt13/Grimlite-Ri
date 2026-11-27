@@ -273,7 +273,7 @@ impl BotManagerWindow {
             "grimlite_bot_manager",
             "Bot",
             [790.0, 385.0],
-            Some([740.0, 360.0]),
+            Some([680.0, 280.0]),
             open,
             |ui| {
                 // Compact density across the entire Bot Manager
@@ -315,7 +315,8 @@ impl BotManagerWindow {
                         .id_salt("bot_mgr_right_scroll")
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
-                            ui.set_max_width(ui.available_width());
+                            let inner_w = (ui.available_width() - 2.0).floor().max(60.0);
+                            ui.set_max_width(inner_w);
                             match self.tab {
                                 RightTab::Combat => dirty |= self.show_combat_tab(ui, &mut cfg),
                                 RightTab::Skills => dirty |= self.show_skills_tab(ui, &mut cfg),
@@ -347,6 +348,23 @@ impl BotManagerWindow {
         }
     }
 
+    pub fn load_gbot_from_path(&mut self, path: &std::path::Path) {
+        match self.bot.load_gbot_file(path) {
+            Ok(()) => {
+                self.selected.clear();
+                self.anchor = None;
+                let name = path
+                    .file_name()
+                    .map_or_else(|| path.display().to_string(), |n| n.to_string_lossy().into_owned());
+                self.status = format!("Loaded: {name}");
+            }
+            Err(e) => self.status = format!("Load error: {e}"),
+        }
+    }
+
+    pub fn notify_gbot_saved(&mut self, name: &str) {
+        self.status = format!("Saved: {name}");
+    }
 }
 
 pub(super) fn two_columns(ui: &mut Ui, add_contents: impl FnOnce(&mut [Ui])) {

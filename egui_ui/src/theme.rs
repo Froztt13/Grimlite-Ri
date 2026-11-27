@@ -105,7 +105,7 @@ pub fn apply(ctx: &Context) {
 
 /// Framed elevated card container with a subtle muted title.
 pub fn card(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&mut Ui)) {
-    let target_inner_w = (ui.available_width() - 18.0).max(60.0);
+    let target_inner_w = (ui.available_width() - 18.0).floor().max(40.0);
     egui::Frame::new()
         .fill(Palette::BG_SURFACE)
         .stroke(Stroke::new(1.0, Palette::BORDER_SUBTLE))
@@ -113,6 +113,7 @@ pub fn card(ui: &mut Ui, title: &str, add_contents: impl FnOnce(&mut Ui)) {
         .inner_margin(Margin::symmetric(8, 6))
         .show(ui, |ui| {
             ui.set_width(target_inner_w);
+            ui.set_max_width(target_inner_w);
             if !title.is_empty() {
                 ui.label(
                     RichText::new(title)

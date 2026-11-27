@@ -216,103 +216,94 @@ impl BotManagerWindow {
 
             // Column 2: Miscellaneous (Delay, Play Sound, Provoke, Logout, Goto Player) + Packet
             group_box(&mut cols[1], "Miscellaneous", |ui| {
-                let row_w = ui.available_width();
-                let btn_w = (row_w * 0.42).clamp(72.0, 96.0);
+                let btn_w = 86.0;
 
                 ui.horizontal(|ui| {
                     ui.label("Delay");
-                    let input_w = (ui.available_width() - btn_w - 28.0).max(46.0);
-                    ui.add(
-                        TextEdit::singleline(&mut self.delay_ms)
-                            .hint_text("1000")
-                            .desired_width(input_w),
-                    );
-                    ui.label("ms");
-                    if theme::primary_button(ui, "+ Delay", [ui.available_width().max(52.0), 21.0])
-                        .clicked()
-                        && let Ok(ms) = self.delay_ms.trim().parse::<u64>()
-                    {
-                        self.push_command(cfg, BotCommand::Delay { ms });
-                        dirty = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "+ Delay", [btn_w, 21.0]).clicked()
+                            && let Ok(ms) = self.delay_ms.trim().parse::<u64>()
+                        {
+                            self.push_command(cfg, BotCommand::Delay { ms });
+                            dirty = true;
+                        }
+                        ui.label("ms");
+                        ui.add(
+                            TextEdit::singleline(&mut self.delay_ms)
+                                .hint_text("1000")
+                                .desired_width(ui.available_width().max(28.0)),
+                        );
+                    });
                 });
 
                 ui.add_space(3.0);
                 ui.horizontal(|ui| {
                     ui.label("Sound");
-                    let input_w = (ui.available_width() - btn_w - 20.0).max(40.0);
-                    theme::num_input(ui, &mut self.beep_times, 1..=50, input_w);
-                    ui.label("x");
-                    if theme::primary_button(
-                        ui,
-                        "Play Sound",
-                        [ui.available_width().max(64.0), 21.0],
-                    )
-                    .clicked()
-                    {
-                        self.push_command(
-                            cfg,
-                            BotCommand::Beep {
-                                times: self.beep_times.max(1),
-                            },
-                        );
-                        dirty = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "Play Sound", [btn_w, 21.0]).clicked() {
+                            self.push_command(
+                                cfg,
+                                BotCommand::Beep {
+                                    times: self.beep_times.max(1),
+                                },
+                            );
+                            dirty = true;
+                        }
+                        ui.label("x");
+                        let num_w = ui.available_width().max(28.0);
+                        theme::num_input(ui, &mut self.beep_times, 1..=50, num_w);
+                    });
                 });
 
                 ui.add_space(3.0);
                 ui.horizontal(|ui| {
                     ui.label("Level");
-                    let input_w = (ui.available_width() - btn_w - 5.0).max(46.0);
-                    ui.add(
-                        TextEdit::singleline(&mut self.misc_level)
-                            .hint_text("100")
-                            .desired_width(input_w),
-                    );
-                    if theme::primary_button(
-                        ui,
-                        "Set Level",
-                        [ui.available_width().max(64.0), 21.0],
-                    )
-                    .clicked()
-                        && let Ok(lvl) = self.misc_level.trim().parse::<i32>()
-                    {
-                        let pkt = format!(
-                            r#"{{"t":"xt","b":{{"r":-1,"o":{{"cmd":"levelUp","intExpToLevel":"2000","intLevel":{lvl}}}}}}}"#
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "Set Level", [btn_w, 21.0]).clicked()
+                            && let Ok(lvl) = self.misc_level.trim().parse::<i32>()
+                        {
+                            let pkt = format!(
+                                r#"{{"t":"xt","b":{{"r":-1,"o":{{"cmd":"levelUp","intExpToLevel":"2000","intLevel":{lvl}}}}}}}"#
+                            );
+                            self.push_command(
+                                cfg,
+                                BotCommand::Packet {
+                                    packet: pkt,
+                                    to_client: true,
+                                    spam_times: 1,
+                                    delay_ms: 500,
+                                },
+                            );
+                            dirty = true;
+                        }
+                        ui.add(
+                            TextEdit::singleline(&mut self.misc_level)
+                                .hint_text("100")
+                                .desired_width(ui.available_width().max(28.0)),
                         );
-                        self.push_command(
-                            cfg,
-                            BotCommand::Packet {
-                                packet: pkt,
-                                to_client: true,
-                                spam_times: 1,
-                                delay_ms: 500,
-                            },
-                        );
-                        dirty = true;
-                    }
+                    });
                 });
 
                 ui.add_space(3.0);
                 ui.horizontal(|ui| {
                     ui.label("FPS");
-                    let input_w = (ui.available_width() - btn_w - 5.0).max(46.0);
-                    theme::num_input(ui, &mut self.misc_fps, 1..=60, input_w);
-                    if theme::primary_button(ui, "Set FPS", [ui.available_width().max(64.0), 21.0])
-                        .clicked()
-                    {
-                        self.push_command(
-                            cfg,
-                            BotCommand::SetFPS {
-                                fps: self.misc_fps.clamp(1, 60),
-                            },
-                        );
-                        dirty = true;
-                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "Set FPS", [btn_w, 21.0]).clicked() {
+                            self.push_command(
+                                cfg,
+                                BotCommand::SetFPS {
+                                    fps: self.misc_fps.clamp(1, 60),
+                                },
+                            );
+                            dirty = true;
+                        }
+                        let num_w = ui.available_width().max(28.0);
+                        theme::num_input(ui, &mut self.misc_fps, 1..=60, num_w);
+                    });
                 });
 
                 ui.add_space(4.0);
-                let half = ((ui.available_width() - 5.0) * 0.5).max(60.0);
+                let half = ((ui.available_width() - 5.0) * 0.5).floor().max(48.0);
                 ui.horizontal(|ui| {
                     if theme::primary_button(ui, "Provoke ON", [half, 21.0]).clicked() {
                         self.push_command(cfg, BotCommand::Provoke { enabled: true });
@@ -328,29 +319,24 @@ impl BotManagerWindow {
                 ui.separator();
                 ui.add_space(2.0);
                 ui.horizontal(|ui| {
-                    let goto_w = 78.0;
-                    let input_w = (ui.available_width() - goto_w - 5.0).max(50.0);
-                    ui.add(
-                        TextEdit::singleline(&mut self.goto_player_name)
-                            .hint_text("Player name")
-                            .desired_width(input_w),
-                    );
-                    if theme::primary_button(
-                        ui,
-                        "Goto Player",
-                        [ui.available_width().max(68.0), 21.0],
-                    )
-                    .clicked()
-                        && !self.goto_player_name.trim().is_empty()
-                    {
-                        self.push_command(
-                            cfg,
-                            BotCommand::GotoPlayer {
-                                player_name: self.goto_player_name.trim().to_string(),
-                            },
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "Goto Player", [btn_w, 21.0]).clicked()
+                            && !self.goto_player_name.trim().is_empty()
+                        {
+                            self.push_command(
+                                cfg,
+                                BotCommand::GotoPlayer {
+                                    player_name: self.goto_player_name.trim().to_string(),
+                                },
+                            );
+                            dirty = true;
+                        }
+                        ui.add(
+                            TextEdit::singleline(&mut self.goto_player_name)
+                                .hint_text("Player name")
+                                .desired_width(ui.available_width().max(32.0)),
                         );
-                        dirty = true;
-                    }
+                    });
                 });
             });
 
@@ -371,7 +357,7 @@ impl BotManagerWindow {
                         "Client",
                         switch_w,
                     );
-                    let rem = ui.available_width().max(60.0);
+                    let rem = ui.available_width().floor().max(48.0);
                     if theme::primary_button(ui, "+ Packet", [rem, 21.0]).clicked()
                         && !self.packet_text.trim().is_empty()
                     {

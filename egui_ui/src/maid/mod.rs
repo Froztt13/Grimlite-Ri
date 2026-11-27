@@ -56,6 +56,24 @@ impl MaidWindow {
         self.save_json = save_json;
     }
 
+    pub fn load_json_from_path(&mut self, path: &std::path::Path) {
+        match self.bot.maid.load_json_file(path) {
+            Ok(name) => {
+                self.bot.logs.push_debug(format!("[Maid] Loaded `{name}`"));
+                self.status_msg = Some((format!("Loaded {name}"), false));
+            }
+            Err(e) => {
+                self.bot.logs.push_debug(format!("[Maid] Load failed: {e}"));
+                self.status_msg = Some((e, true));
+            }
+        }
+    }
+
+    pub fn notify_json_saved(&mut self, name: &str) {
+        self.bot.logs.push_debug(format!("[Maid] Saved `{name}`"));
+        self.status_msg = Some((format!("Saved {name}"), false));
+    }
+
     /// Polls Maid's quick hotkeys (`R` = Unfollow/LockCell, `T` = Stop Attack) when Maid is running.
     pub fn poll_quick_hotkeys(&self, ctx: &Context, child_keys: &[Key]) {
         if !self.bot.maid.is_running() {
@@ -114,7 +132,7 @@ impl MaidWindow {
             "grimlite_maid",
             "Maid Remake",
             [380.0, 425.0],
-            Some([355.0, 400.0]),
+            Some([340.0, 280.0]),
             &mut open,
             |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
@@ -213,7 +231,8 @@ impl MaidWindow {
                 ScrollArea::vertical()
                     .auto_shrink([false, false])
                     .show(ui, |ui| {
-                        ui.set_max_width(ui.available_width());
+                        let inner_w = (ui.available_width() - 2.0).floor().max(60.0);
+                        ui.set_max_width(inner_w);
                         match self.tab {
                             MaidTab::Main => dirty |= self.show_main_tab(ui, &mut cfg),
                             MaidTab::Combat => dirty |= self.show_combat_tab(ui, &mut cfg),
@@ -235,59 +254,61 @@ impl MaidWindow {
         theme::card(ui, "Target & Following", |ui| {
             ui.horizontal(|ui| {
                 ui.label("Target");
-                let trailing_w = 56.0 + 26.0 + 32.0 + 18.0;
-                let input_w = (ui.available_width() - trailing_w).max(80.0);
-                if ui
-                    .add_sized(
-                        [input_w, 22.0],
-                        TextEdit::singleline(&mut cfg.target).hint_text("Player username..."),
-                    )
-                    .changed()
-                {
-                    dirty = true;
-                }
-
-                let players = self
-                    .players_cache
-                    .lock()
-                    .map(|g| g.clone())
-                    .unwrap_or_default();
-                let resp = theme::dropdown(ui, "maid_target_picker", "Map", 54.0, |ui| {
-                    if players.is_empty() {
-                        ui.label(RichText::new("Click ↻ to load").small().weak());
-                    }
-                    for p in &players {
-                        if ui
-                            .selectable_label(cfg.target.eq_ignore_ascii_case(p), p)
-                            .clicked()
-                        {
-                            cfg.target = p.clone();
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_sized([34.0, 22.0], egui::Button::new("Me"))
+                        .on_hover_text("Set target to your own username")
+                        .clicked()
+                    {
+                        let me = self.bot.player_snapshot().username;
+                        if !me.is_empty() {
+                            cfg.target = me;
                             dirty = true;
                         }
                     }
-                });
-                if resp.response.clicked() {
-                    self.refresh_players();
-                }
+                    if ui
+                        .add_sized([24.0, 22.0], egui::Button::new("↻"))
+                        .on_hover_text("Refresh players in current map")
+                        .clicked()
+                    {
+                        self.refresh_players();
+                    }
 
-                if ui
-                    .add_sized([24.0, 22.0], egui::Button::new("↻"))
-                    .on_hover_text("Refresh players in current map")
-                    .clicked()
-                {
-                    self.refresh_players();
-                }
-                if ui
-                    .add_sized([30.0, 22.0], egui::Button::new("Me"))
-                    .on_hover_text("Set target to your own username")
-                    .clicked()
-                {
-                    let me = self.bot.player_snapshot().username;
-                    if !me.is_empty() {
-                        cfg.target = me;
+                    let players = self
+                        .players_cache
+                        .lock()
+                        .map(|g| g.clone())
+                        .unwrap_or_default();
+                    let resp = theme::dropdown(ui, "maid_target_picker", "Map", 62.0, |ui| {
+                        if players.is_empty() {
+                            ui.label(RichText::new("Click ↻ to load").small().weak());
+                        }
+                        for p in &players {
+                            if ui
+                                .selectable_label(cfg.target.eq_ignore_ascii_case(p), p)
+                                .clicked()
+                            {
+                                cfg.target = p.clone();
+                                dirty = true;
+                            }
+                        }
+                    });
+                    if resp.response.clicked() {
+                        self.refresh_players();
+                    }
+
+                    let rem = ui.available_width().max(40.0);
+                    if ui
+                        .add(
+                            TextEdit::singleline(&mut cfg.target)
+                                .hint_text("Player username...")
+                                .desired_width(rem),
+                        )
+                        .changed()
+                    {
                         dirty = true;
                     }
-                }
+                });
             });
 
             ui.add_space(2.0);
@@ -504,24 +525,23 @@ impl MaidWindow {
             });
 
             ui.horizontal(|ui| {
-                let add_w = 48.0;
-                let input_w = (ui.available_width() - add_w - 6.0).max(100.0);
-                let resp = ui.add_sized(
-                    [input_w, 20.0],
-                    TextEdit::singleline(&mut self.locked_map_draft)
-                        .hint_text("whitemap-100000;Enter;Spawn"),
-                );
-                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                if (theme::primary_button(ui, "+ Add", [add_w, 20.0]).clicked() || enter)
-                    && !self.locked_map_draft.trim().is_empty()
-                {
-                    let val = self.locked_map_draft.trim().to_string();
-                    if !items.iter().any(|x| x.eq_ignore_ascii_case(&val)) {
-                        items.push(val);
-                        changed = true;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let add_clicked = theme::primary_button(ui, "+ Add", [52.0, 20.0]).clicked();
+                    let resp = ui.add(
+                        TextEdit::singleline(&mut self.locked_map_draft)
+                            .hint_text("whitemap-100000;Enter;Spawn")
+                            .desired_width(ui.available_width().max(60.0)),
+                    );
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if (add_clicked || enter) && !self.locked_map_draft.trim().is_empty() {
+                        let val = self.locked_map_draft.trim().to_string();
+                        if !items.iter().any(|x| x.eq_ignore_ascii_case(&val)) {
+                            items.push(val);
+                            changed = true;
+                        }
+                        self.locked_map_draft.clear();
                     }
-                    self.locked_map_draft.clear();
-                }
+                });
             });
 
             let mut remove_idx: Option<usize> = None;
@@ -600,24 +620,23 @@ impl MaidWindow {
             });
 
             ui.horizontal(|ui| {
-                let add_w = 48.0;
-                let input_w = (ui.available_width() - add_w - 6.0).max(100.0);
-                let resp = ui.add_sized(
-                    [input_w, 20.0],
-                    TextEdit::singleline(&mut self.whitelist_map_draft)
-                        .hint_text("map;cell  or  map;all"),
-                );
-                let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                if (theme::primary_button(ui, "+ Add", [add_w, 20.0]).clicked() || enter)
-                    && !self.whitelist_map_draft.trim().is_empty()
-                {
-                    let val = self.whitelist_map_draft.trim().to_string();
-                    if !items.iter().any(|x| x.eq_ignore_ascii_case(&val)) {
-                        items.push(val);
-                        changed = true;
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let add_clicked = theme::primary_button(ui, "+ Add", [52.0, 20.0]).clicked();
+                    let resp = ui.add(
+                        TextEdit::singleline(&mut self.whitelist_map_draft)
+                            .hint_text("map;cell  or  map;all")
+                            .desired_width(ui.available_width().max(60.0)),
+                    );
+                    let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if (add_clicked || enter) && !self.whitelist_map_draft.trim().is_empty() {
+                        let val = self.whitelist_map_draft.trim().to_string();
+                        if !items.iter().any(|x| x.eq_ignore_ascii_case(&val)) {
+                            items.push(val);
+                            changed = true;
+                        }
+                        self.whitelist_map_draft.clear();
                     }
-                    self.whitelist_map_draft.clear();
-                }
+                });
             });
 
             let mut remove_idx: Option<usize> = None;

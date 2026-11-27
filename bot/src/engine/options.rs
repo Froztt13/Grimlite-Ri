@@ -2,14 +2,25 @@
 
 use parking_lot::RwLock;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 /// Target AQW stage dimensions for cached Lag Killer wallpapers.
 pub const LAG_KILLER_WIDTH: u32 = 960;
 pub const LAG_KILLER_HEIGHT: u32 = 550;
 
+static CUSTOM_CACHE_DIR: OnceLock<PathBuf> = OnceLock::new();
+
+/// Overrides the base cache directory on platforms where `dirs::cache_dir()` is unavailable (Android).
+pub fn set_cache_dir(dir: PathBuf) {
+    let _ = CUSTOM_CACHE_DIR.set(dir);
+}
+
 /// Persistent cache path for the cropped & resized Lag Killer wallpaper.
 pub fn lag_killer_cache_path() -> PathBuf {
-    dirs::cache_dir()
+    CUSTOM_CACHE_DIR
+        .get()
+        .cloned()
+        .or_else(dirs::cache_dir)
         .or_else(dirs::data_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Grimlite-Ri")

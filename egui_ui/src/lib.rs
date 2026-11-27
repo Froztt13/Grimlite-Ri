@@ -3,6 +3,7 @@
 pub mod bot_managers;
 pub mod command_editor;
 pub mod maid;
+pub mod mobile;
 pub mod system;
 pub mod theme;
 pub mod tools;
@@ -15,8 +16,10 @@ use grimlite_bot::host::FlashArg;
 use grimlite_bot::options::BotOptions;
 use std::sync::Arc;
 
+pub use mobile::{MOBILE_KB_BAR_HEIGHT, MOBILE_RAIL_WIDTH};
+
 pub const TAB_BAR_HEIGHT: f32 = 26.0;
-pub const TAB_RAIL_WIDTH: f32 = 58.0;
+pub const TAB_RAIL_WIDTH: f32 = MOBILE_RAIL_WIDTH;
 pub const NAV_BAR_HEIGHT: f32 = 34.0;
 const APP_ICON_RGBA: &[u8] = include_bytes!("../assets/grimlite-icon-64.rgba");
 const GITHUB_URL: &str = "https://github.com/Froztt13/Grimlite-Ri";
@@ -318,7 +321,7 @@ pub fn show_tab_bar(egui_ui: &mut Ui, tabs: &[TabDescriptor], active_id: u64) ->
     action
 }
 
-const PADS: &[&str] = &[
+pub(crate) const PADS: &[&str] = &[
     "Center", "Spawn", "Left", "Right", "Top", "Bottom", "Up", "Down",
 ];
 
@@ -347,17 +350,60 @@ pub fn show_detached_window_sized(
     if !*open {
         return;
     }
+    let mobile_bounds = ctx.data(|d| {
+        d.get_temp::<egui::Rect>(egui::Id::new(mobile::MOBILE_CONSTRAIN_RECT_KEY))
+    });
+    let (eff_default, eff_min) = if let Some(bounds) = mobile_bounds {
+        let max_w = (bounds.width() - 16.0).max(200.0);
+        let max_h = (bounds.height() - 36.0).max(160.0);
+        let def = [default_size[0].min(max_w), default_size[1].min(max_h)];
+        let mn = min_size.map(|m| [m[0].min(max_w), m[1].min(max_h)]);
+        (def, mn)
+    } else {
+        (default_size, min_size)
+    };
+
     let mut win = egui::Window::new(title)
         .id(egui::Id::new(id))
         .open(open)
-        .default_size(default_size)
-        .constrain(true)
+        .default_size(eff_default)
         .resizable(true)
         .collapsible(true);
-    if let Some(min) = min_size {
+    if let Some(bounds) = mobile_bounds {
+        win = win.constrain_to(bounds);
+    } else {
+        win = win.constrain(true);
+    }
+    if let Some(min) = eff_min {
         win = win.min_size(min);
     }
-    win.show(ctx, |ui| add_contents(ui));
+    win.show(ctx, |ui| {
+        if ui.is_sizing_pass() {
+            add_contents(ui);
+            return;
+        }
+        // Lock horizontal layout strictly to the window's current width so sub-pixel ScrollArea
+        // rounding (on fractional mobile DPIs like 2.625x) or inner widget rows can NEVER feed
+        // back into `Resize` and cause the window to slowly creep wider each frame. Manual edge /
+        // corner drag-resizing still updates `ui.available_width()` directly via `Window`.
+        let avail = ui.available_rect_before_wrap();
+        let target_w = avail.width().max(1.0);
+        let mut child = ui.new_child(
+            egui::UiBuilder::new()
+                .max_rect(avail)
+                .layout(*ui.layout()),
+        );
+        child.set_clip_rect(ui.clip_rect().intersect(egui::Rect::from_min_max(
+            egui::pos2(avail.min.x - 2.0, ui.clip_rect().min.y),
+            egui::pos2(avail.max.x + 2.0, ui.clip_rect().max.y),
+        )));
+        add_contents(&mut child);
+        let used_h = child.min_rect().height();
+        ui.advance_cursor_after_rect(egui::Rect::from_min_size(
+            avail.min,
+            egui::vec2(target_w, used_h),
+        ));
+    });
 }
 
 pub struct GrimliteUi {
@@ -369,6 +415,8 @@ pub struct GrimliteUi {
     show_bot_manager: bool,
     show_options: bool,
     show_logs: bool,
+    pub(crate) mobile_flyout: Option<mobile::MobileFlyout>,
+    pub(crate) mobile_combo_open: bool,
 
     options: BotOptions,
     theme_applied: bool,
@@ -399,6 +447,8 @@ impl GrimliteUi {
             show_bot_manager: false,
             show_options: false,
             show_logs: false,
+            mobile_flyout: None,
+            mobile_combo_open: false,
             options,
             theme_applied: false,
             app_icon: None,
@@ -424,13 +474,63 @@ impl GrimliteUi {
         self
     }
 
-    /// Whether any Grimlite overlay window is currently open on the canvas.
+    /// Applies an asynchronously picked Lag Killer wallpaper image (used by Android SAF picker).
+    pub fn apply_picked_lag_killer_image(&mut self, path: &std::path::Path) {
+        match grimlite_bot::options::prepare_lag_killer_wallpaper(path) {
+            Ok(cached) => {
+                self.options.lag_killer_image = Some(cached.to_string_lossy().to_string());
+                self.options.lag_killer_image_rev =
+                    self.options.lag_killer_image_rev.wrapping_add(1);
+                self.bot.apply_options(self.options.clone());
+            }
+            Err(e) => {
+                self.bot.logs.push_debug(format!("[LagKiller] {e}"));
+            }
+        }
+    }
+
+    /// Loads an asynchronously picked `.gbot` / `.json` bot file (used by Android SAF picker).
+    pub fn apply_picked_gbot(&mut self, path: &std::path::Path) {
+        self.bot_manager.load_gbot_from_path(path);
+    }
+
+    /// Loads an asynchronously picked Maid `.json` config (used by Android SAF picker).
+    pub fn apply_picked_maid_json(&mut self, path: &std::path::Path) {
+        self.tools.maid.load_json_from_path(path);
+    }
+
+    /// Updates Bot Manager status after an asynchronous Android SAF `.gbot` save completes.
+    pub fn notify_saved_gbot(&mut self, name: &str) {
+        self.bot_manager.notify_gbot_saved(name);
+    }
+
+    /// Updates Maid status after an asynchronous Android SAF `.json` save completes.
+    pub fn notify_saved_maid_json(&mut self, name: &str) {
+        self.tools.maid.notify_json_saved(name);
+    }
+
+    /// Whether a mobile left-rail flyout (`Accounts`, `Quick Controls`, or `Tools`) is currently open.
+    pub fn has_active_flyout(&self) -> bool {
+        self.mobile_flyout.is_some()
+    }
+
+    /// Whether any Grimlite overlay window or flyout is currently open on the canvas.
     pub fn has_open_window(&self) -> bool {
         self.show_about
             || self.show_bot_manager
             || self.show_options
             || self.show_logs
+            || self.mobile_flyout.is_some()
             || self.tools.has_open_window()
+    }
+
+    pub(crate) fn ensure_app_icon(&mut self, ctx: &Context) -> egui::TextureHandle {
+        self.app_icon
+            .get_or_insert_with(|| {
+                let image = egui::ColorImage::from_rgba_unmultiplied([64, 64], APP_ICON_RGBA);
+                ctx.load_texture("grimlite_app_icon", image, egui::TextureOptions::LINEAR)
+            })
+            .clone()
     }
 
     pub fn show(&mut self, ctx: &Context, egui_ui: &mut Ui) {
@@ -675,13 +775,7 @@ impl GrimliteUi {
     }
 
     fn show_about_window(&mut self, ctx: &Context) {
-        let icon_tex = self
-            .app_icon
-            .get_or_insert_with(|| {
-                let image = egui::ColorImage::from_rgba_unmultiplied([64, 64], APP_ICON_RGBA);
-                ctx.load_texture("grimlite_app_icon", image, egui::TextureOptions::LINEAR)
-            })
-            .clone();
+        let icon_tex = self.ensure_app_icon(ctx);
 
         // Poll process CPU & RAM at 1 Hz only while the About window is open
         let res = self
@@ -696,96 +790,102 @@ impl GrimliteUi {
             "grimlite_about",
             "About Grimlite Ri",
             [400.0, 445.0],
-            Some([360.0, 420.0]),
+            Some([320.0, 260.0]),
             &mut open,
             |ui| {
-                ui.vertical_centered(|ui| {
-                    ui.add_space(4.0);
-                    ui.image((icon_tex.id(), egui::vec2(52.0, 52.0)));
-                    ui.add_space(4.0);
-                    ui.label(
-                        RichText::new("Grimlite Ri")
-                            .size(20.0)
-                            .strong()
-                            .color(Color32::from_rgb(230, 57, 70)),
-                    );
-                    ui.label(
-                        RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
-                            .small()
-                            .weak(),
-                    );
-                });
-
-                ui.add_space(6.0);
-                ui.label(
-                    "Multiplatform revamp of Grimlite-Li for AdventureQuest Worlds, \
-                     built on Ruffle (AQW) and egui while preserving Grimlite-Li bot behavior.",
-                );
-                ui.add_space(6.0);
-                ui.separator();
-                ui.add_space(4.0);
-
-                egui::Grid::new("grimlite_about_grid")
-                    .num_columns(2)
-                    .spacing([14.0, 4.0])
+                ScrollArea::vertical()
+                    .id_salt("grimlite_about_scroll")
+                    .auto_shrink([false, true])
                     .show(ui, |ui| {
-                        ui.label(RichText::new("Bot Engine").weak());
-                        ui.label("Grimlite-Li behavior & .gbot format");
-                        ui.end_row();
+                        ui.set_max_width(ui.available_width());
+                        ui.vertical_centered(|ui| {
+                            ui.add_space(4.0);
+                            ui.image((icon_tex.id(), egui::vec2(52.0, 52.0)));
+                            ui.add_space(4.0);
+                            ui.label(
+                                RichText::new("Grimlite Ri")
+                                    .size(20.0)
+                                    .strong()
+                                    .color(Color32::from_rgb(230, 57, 70)),
+                            );
+                            ui.label(
+                                RichText::new(format!("v{}", env!("CARGO_PKG_VERSION")))
+                                    .small()
+                                    .weak(),
+                            );
+                        });
 
-                        ui.label(RichText::new("Flash Engine").weak());
-                        ui.label("Ruffle (AQW / Mugetsu patches)");
-                        ui.end_row();
-
-                        ui.label(RichText::new("UI & Platform").weak());
-                        ui.label("egui + wgpu (Multiplatform)");
-                        ui.end_row();
-
-                        ui.label(RichText::new("Packet Capture").weak());
-                        ui.label("In-process Socket Interception");
-                        ui.end_row();
-
-                        ui.label(RichText::new("Modes").weak());
-                        ui.label("Desktop (GPU) & Headless (2 FPS)");
-                        ui.end_row();
-
-                        ui.label(RichText::new("GitHub").weak());
-                        ui.hyperlink_to("github.com/Froztt13/Grimlite-Ri", GITHUB_URL);
-                        ui.end_row();
-                    });
-
-                ui.add_space(8.0);
-
-                theme::card(ui, "Resource Monitor", |ui| {
-                    ui.spacing_mut().item_spacing.y = 5.0;
-                    let cpu_frac = (res.cpu_percent / 100.0).clamp(0.0, 1.0);
-                    theme::stat_bar(
-                        ui,
-                        "CPU",
-                        &format!("{:.1}%", res.cpu_percent),
-                        cpu_frac,
-                        Color32::from_rgb(52, 152, 219),
-                    );
-                    let ram_scale = res.peak_ram_mb.max(512.0);
-                    let ram_frac = (res.ram_mb / ram_scale).clamp(0.0, 1.0);
-                    theme::stat_bar(
-                        ui,
-                        "RAM",
-                        &format!("{:.1} MB (Peak {:.1} MB)", res.ram_mb, res.peak_ram_mb),
-                        ram_frac,
-                        Color32::from_rgb(46, 170, 115),
-                    );
-                    ui.horizontal(|ui| {
-                        let h = res.uptime_secs / 3600;
-                        let m = (res.uptime_secs % 3600) / 60;
-                        let s = res.uptime_secs % 60;
+                        ui.add_space(6.0);
                         ui.label(
-                            RichText::new(format!("Uptime  {h:02}:{m:02}:{s:02}"))
-                                .small()
-                                .weak(),
+                            "Multiplatform revamp of Grimlite-Li for AdventureQuest Worlds, \
+                             built on Ruffle (AQW) and egui while preserving Grimlite-Li bot behavior.",
                         );
+                        ui.add_space(6.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        egui::Grid::new("grimlite_about_grid")
+                            .num_columns(2)
+                            .spacing([14.0, 4.0])
+                            .show(ui, |ui| {
+                                ui.label(RichText::new("Bot Engine").weak());
+                                ui.label("Grimlite-Li behavior & .gbot format");
+                                ui.end_row();
+
+                                ui.label(RichText::new("Flash Engine").weak());
+                                ui.label("Ruffle (AQW / Mugetsu patches)");
+                                ui.end_row();
+
+                                ui.label(RichText::new("UI & Platform").weak());
+                                ui.label("egui + wgpu (Multiplatform)");
+                                ui.end_row();
+
+                                ui.label(RichText::new("Packet Capture").weak());
+                                ui.label("In-process Socket Interception");
+                                ui.end_row();
+
+                                ui.label(RichText::new("Modes").weak());
+                                ui.label("Desktop (GPU) & Headless (2 FPS)");
+                                ui.end_row();
+
+                                ui.label(RichText::new("GitHub").weak());
+                                ui.hyperlink_to("github.com/Froztt13/Grimlite-Ri", GITHUB_URL);
+                                ui.end_row();
+                            });
+
+                        ui.add_space(8.0);
+
+                        theme::card(ui, "Resource Monitor", |ui| {
+                            ui.spacing_mut().item_spacing.y = 5.0;
+                            let cpu_frac = (res.cpu_percent / 100.0).clamp(0.0, 1.0);
+                            theme::stat_bar(
+                                ui,
+                                "CPU",
+                                &format!("{:.1}%", res.cpu_percent),
+                                cpu_frac,
+                                Color32::from_rgb(52, 152, 219),
+                            );
+                            let ram_scale = res.peak_ram_mb.max(512.0);
+                            let ram_frac = (res.ram_mb / ram_scale).clamp(0.0, 1.0);
+                            theme::stat_bar(
+                                ui,
+                                "RAM",
+                                &format!("{:.1} MB (Peak {:.1} MB)", res.ram_mb, res.peak_ram_mb),
+                                ram_frac,
+                                Color32::from_rgb(46, 170, 115),
+                            );
+                            ui.horizontal(|ui| {
+                                let h = res.uptime_secs / 3600;
+                                let m = (res.uptime_secs % 3600) / 60;
+                                let s = res.uptime_secs % 60;
+                                ui.label(
+                                    RichText::new(format!("Uptime  {h:02}:{m:02}:{s:02}"))
+                                        .small()
+                                        .weak(),
+                                );
+                            });
+                        });
                     });
-                });
             },
         );
         self.show_about = open;

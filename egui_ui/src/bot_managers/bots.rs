@@ -29,12 +29,13 @@ impl BotManagerWindow {
                     }
                     if theme::primary_button(ui, "Save .gbot...", [half, 22.0]).clicked()
                         && let Some(save) = &self.save_gbot
-                        && let Some(path) = save()
                     {
                         self.bot.runner.update_config(cfg.clone());
-                        match self.bot.save_gbot_file(&path) {
-                            Ok(()) => self.status = format!("Saved: {}", path.display()),
-                            Err(e) => self.status = format!("Save error: {e}"),
+                        if let Some(path) = save() {
+                            match self.bot.save_gbot_file(&path) {
+                                Ok(()) => self.status = format!("Saved: {}", path.display()),
+                                Err(e) => self.status = format!("Save error: {e}"),
+                            }
                         }
                     }
                 });

@@ -146,41 +146,39 @@ impl BotManagerWindow {
             cols[0].add_space(6.0);
             group_box(&mut cols[0], "Load Map", |ui| {
                 ui.horizontal(|ui| {
-                    let btn_w = 56.0;
-                    let input_w = (ui.available_width() - btn_w - 6.0).max(50.0);
-                    ui.add(
-                        TextEdit::singleline(&mut self.load_map_swf)
-                            .hint_text("Map file (.swf)")
-                            .desired_width(input_w),
-                    );
-                    if theme::primary_button(ui, "Load", [btn_w, 21.0])
-                        .clicked()
-                    {
-                        let swf = self.load_map_swf.trim();
-                        if !swf.is_empty() && swf.to_ascii_lowercase().ends_with(".swf") {
-                            self.push_command(
-                                cfg,
-                                BotCommand::LoadMap {
-                                    swf: swf.to_string(),
-                                },
-                            );
-                            dirty = true;
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if theme::primary_button(ui, "Load", [56.0, 21.0]).clicked() {
+                            let swf = self.load_map_swf.trim();
+                            if !swf.is_empty() && swf.to_ascii_lowercase().ends_with(".swf") {
+                                self.push_command(
+                                    cfg,
+                                    BotCommand::LoadMap {
+                                        swf: swf.to_string(),
+                                    },
+                                );
+                                dirty = true;
+                            }
                         }
-                    }
+                        ui.add(
+                            TextEdit::singleline(&mut self.load_map_swf)
+                                .hint_text("Map file (.swf)")
+                                .desired_width(ui.available_width().max(36.0)),
+                        );
+                    });
                 });
             });
 
             // Column 2: Temp Integer + Index
             group_box(&mut cols[1], "Temp Integer", |ui| {
                 ui.horizontal(|ui| {
-                    let num_w = 56.0;
-                    let name_w = (ui.available_width() - num_w - 5.0).max(60.0);
-                    ui.add(
-                        TextEdit::singleline(&mut self.temp_int_name)
-                            .hint_text("Int name")
-                            .desired_width(name_w),
-                    );
-                    theme::num_input(ui, &mut self.temp_int_val, -999_999..=999_999, num_w);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        theme::num_input(ui, &mut self.temp_int_val, -999_999..=999_999, 56.0);
+                        ui.add(
+                            TextEdit::singleline(&mut self.temp_int_name)
+                                .hint_text("Int name")
+                                .desired_width(ui.available_width().max(36.0)),
+                        );
+                    });
                 });
                 ui.add_space(4.0);
                 let third = ((ui.available_width() - 8.0) / 3.0).max(46.0);

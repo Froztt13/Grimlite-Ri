@@ -23,7 +23,7 @@ mod runtime {
     use egui::{Context, Pos2, RawInput, Rect};
     use grimlite_bot::Bot;
     use grimlite_egui::{
-        GrimliteUi, NAV_BAR_HEIGHT, TAB_RAIL_WIDTH, TabBarAction, TabDescriptor, TabLayout,
+        GrimliteUi, MOBILE_KB_BAR_HEIGHT, MOBILE_RAIL_WIDTH, TabBarAction, TabDescriptor,
     };
     use grimlite_frontend::capture::CaptureNavigator;
     use grimlite_frontend::external::GrimliteExternalInterface;
@@ -56,9 +56,26 @@ mod runtime {
     use std::path::{Path, PathBuf};
     use std::rc::Rc;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::{Arc, Mutex, mpsc};
+    use std::sync::{Arc, Mutex, OnceLock, mpsc};
     use std::time::{Duration, Instant};
     use url::Url;
+
+    const DOC_PICK_LAG_IMAGE: i32 = 1;
+    const DOC_PICK_GBOT: i32 = 2;
+    const DOC_SAVE_GBOT: i32 = 3;
+    const DOC_PICK_MAID_JSON: i32 = 4;
+    const DOC_SAVE_MAID_JSON: i32 = 5;
+
+    static GLOBAL_ENGINE_TX: OnceLock<Mutex<Option<mpsc::Sender<EngineMsg>>>> = OnceLock::new();
+
+    pub(super) fn send_global_engine_msg(msg: EngineMsg) {
+        if let Some(slot) = GLOBAL_ENGINE_TX.get()
+            && let Ok(guard) = slot.lock()
+            && let Some(tx) = guard.as_ref()
+        {
+            let _ = tx.send(msg);
+        }
+    }
 
     /// Mugetsu 2.0 / Ruffle-AQW speed-up switches enabled before any worker threads start.
     const DEFAULT_ON_SWITCHES: [&str; 8] = [
@@ -83,13 +100,13 @@ mod runtime {
     const SHAPE_SWEEP_EVERY: Duration = Duration::from_secs(60);
 
     #[derive(Clone, Copy, Debug)]
-    enum TouchKind {
+    pub(super) enum TouchKind {
         Down,
         Move,
         Up,
     }
 
-    enum EngineMsg {
+    pub(super) enum EngineMsg {
         InitWindow,
         ResizeWindow,
         DetachWindow(mpsc::SyncSender<()>),
@@ -109,6 +126,17 @@ mod runtime {
         KeyChar(char),
         Task(u64, async_task::Runnable),
         FlashCall(u64, FlashCallRequest),
+        DocumentPicked {
+            tab_id: u64,
+            kind: i32,
+            path: Option<String>,
+        },
+        DocumentSaved {
+            tab_id: u64,
+            kind: i32,
+            name: Option<String>,
+        },
+        StopAllBots,
     }
 
     struct AndroidTab {
@@ -297,14 +325,18 @@ mod runtime {
         win_h: u32,
         ppp: f32,
         flash_kb_bar: bool,
+        rail_collapsed: bool,
     ) -> (f32, f32, u32, u32, u32, u32, f64) {
-        let left_px = (TAB_RAIL_WIDTH * ppp).round();
-        let top_logical = if flash_kb_bar {
-            NAV_BAR_HEIGHT + 34.0
+        let left_px = if rail_collapsed {
+            0.0
         } else {
-            NAV_BAR_HEIGHT
+            (MOBILE_RAIL_WIDTH * ppp).round()
         };
-        let top_px = (top_logical * ppp).round();
+        let top_px = if flash_kb_bar {
+            (MOBILE_KB_BAR_HEIGHT * ppp).round()
+        } else {
+            0.0
+        };
         let raw_w = win_w.saturating_sub(left_px as u32).max(1);
         let raw_h = win_h.saturating_sub(top_px as u32).max(1);
         let render_scale = if raw_h > MAX_GAME_RENDER_HEIGHT {
@@ -345,10 +377,11 @@ mod runtime {
         win_w: u32,
         win_h: u32,
         ppp: f32,
+        rail_collapsed: bool,
     ) -> AndroidTab {
         let bot = Bot::new();
         let (_, _, _, _, drawn_w, drawn_h, render_scale) =
-            compute_game_layout(win_w, win_h, ppp, false);
+            compute_game_layout(win_w, win_h, ppp, false, rail_collapsed);
         let target = GpuTextureTarget::new(blit, &descriptors.device, drawn_w, drawn_h);
         let renderer = WgpuRenderBackend::new(descriptors, target)
             .expect("Android WgpuRenderBackend<GpuTextureTarget>");
@@ -413,7 +446,7 @@ mod runtime {
             p.fetch_root_movie(swf_url.to_string(), vec![], Box::new(|_| {}));
         }
 
-        let ui = GrimliteUi::new(bot.clone(), None, None);
+        let ui = build_android_grimlite_ui(app, tab_id, bot.clone());
         AndroidTab {
             id: tab_id,
             bot,
@@ -424,9 +457,212 @@ mod runtime {
         }
     }
 
-    fn resize_tab_viewport(tab: &mut AndroidTab, win_w: u32, win_h: u32, ppp: f32) {
+    fn build_android_grimlite_ui(app: &AndroidApp, tab_id: u64, bot: Arc<Bot>) -> GrimliteUi {
+        let app_gbot_pick = app.clone();
+        let pick_gbot: grimlite_egui::bot_managers::FileDialogFn = Box::new(move || {
+            jni_open_document(
+                &app_gbot_pick,
+                tab_id,
+                DOC_PICK_GBOT,
+                "application/json\napplication/octet-stream\ntext/plain\n*/*",
+            );
+            None
+        });
+
+        let app_gbot_save = app.clone();
+        let bot_gbot_save = bot.clone();
+        let save_gbot: grimlite_egui::bot_managers::FileDialogFn = Box::new(move || {
+            let cfg = bot_gbot_save.runner.config();
+            if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+                jni_save_document(
+                    &app_gbot_save,
+                    tab_id,
+                    DOC_SAVE_GBOT,
+                    "application/json",
+                    "bot.gbot",
+                    &json,
+                );
+            }
+            None
+        });
+
+        let app_maid_pick = app.clone();
+        let pick_maid: grimlite_egui::bot_managers::FileDialogFn = Box::new(move || {
+            jni_open_document(
+                &app_maid_pick,
+                tab_id,
+                DOC_PICK_MAID_JSON,
+                "application/json\ntext/plain\n*/*",
+            );
+            None
+        });
+
+        let app_maid_save = app.clone();
+        let bot_maid_save = bot.clone();
+        let save_maid: grimlite_egui::bot_managers::FileDialogFn = Box::new(move || {
+            let cfg = bot_maid_save.maid.config();
+            if let Ok(json) = serde_json::to_string_pretty(&cfg) {
+                jni_save_document(
+                    &app_maid_save,
+                    tab_id,
+                    DOC_SAVE_MAID_JSON,
+                    "application/json",
+                    "maid.json",
+                    &json,
+                );
+            }
+            None
+        });
+
+        let app_img_pick = app.clone();
+        let pick_img: grimlite_egui::bot_managers::FileDialogFn = Box::new(move || {
+            jni_open_document(
+                &app_img_pick,
+                tab_id,
+                DOC_PICK_LAG_IMAGE,
+                "image/png\nimage/jpeg\nimage/webp",
+            );
+            None
+        });
+
+        GrimliteUi::new(bot, Some(pick_gbot), Some(save_gbot))
+            .with_maid_dialogs(Some(pick_maid), Some(save_maid))
+            .with_image_dialog(Some(pick_img))
+    }
+
+    fn jni_open_document(app: &AndroidApp, tab_id: u64, kind: i32, mime_types: &str) {
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let activity_raw = app.activity_as_ptr() as jni::sys::jobject;
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let activity = unsafe { env.as_cast_raw::<jni::objects::JObject>(&activity_raw) }?;
+            let jtypes = jni::objects::JString::from_str(env, mime_types)?;
+            env.call_method(
+                &*activity,
+                jni::jni_str!("openDocument"),
+                jni::jni_sig!("(JILjava/lang/String;)V"),
+                &[
+                    jni::objects::JValue::Long(tab_id as i64),
+                    jni::objects::JValue::Int(kind),
+                    jni::objects::JValue::Object(&jtypes),
+                ],
+            )?;
+            Ok(())
+        });
+        if let Err(e) = res {
+            log::warn!("JNI openDocument call failed: {e}");
+        }
+    }
+
+    fn jni_save_document(
+        app: &AndroidApp,
+        tab_id: u64,
+        kind: i32,
+        mime_type: &str,
+        file_name: &str,
+        content: &str,
+    ) {
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let activity_raw = app.activity_as_ptr() as jni::sys::jobject;
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let activity = unsafe { env.as_cast_raw::<jni::objects::JObject>(&activity_raw) }?;
+            let jmime = jni::objects::JString::from_str(env, mime_type)?;
+            let jname = jni::objects::JString::from_str(env, file_name)?;
+            let jcontent = jni::objects::JString::from_str(env, content)?;
+            env.call_method(
+                &*activity,
+                jni::jni_str!("saveDocument"),
+                jni::jni_sig!("(JILjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V"),
+                &[
+                    jni::objects::JValue::Long(tab_id as i64),
+                    jni::objects::JValue::Int(kind),
+                    jni::objects::JValue::Object(&jmime),
+                    jni::objects::JValue::Object(&jname),
+                    jni::objects::JValue::Object(&jcontent),
+                ],
+            )?;
+            Ok(())
+        });
+        if let Err(e) = res {
+            log::warn!("JNI saveDocument call failed: {e}");
+        }
+    }
+
+    fn jni_update_bot_service(app: &AndroidApp, active: bool, title: &str, text: &str) {
+        let vm = unsafe { jni::JavaVM::from_raw(app.vm_as_ptr().cast()) };
+        let activity_raw = app.activity_as_ptr() as jni::sys::jobject;
+        let res = vm.attach_current_thread(|env| -> jni::errors::Result<()> {
+            let activity = unsafe { env.as_cast_raw::<jni::objects::JObject>(&activity_raw) }?;
+            let jtitle = jni::objects::JString::from_str(env, title)?;
+            let jtext = jni::objects::JString::from_str(env, text)?;
+            env.call_method(
+                &*activity,
+                jni::jni_str!("updateBotService"),
+                jni::jni_sig!("(ZLjava/lang/String;Ljava/lang/String;)V"),
+                &[
+                    jni::objects::JValue::Bool(active),
+                    jni::objects::JValue::Object(&jtitle),
+                    jni::objects::JValue::Object(&jtext),
+                ],
+            )?;
+            Ok(())
+        });
+        if let Err(e) = res {
+            log::warn!("JNI updateBotService call failed: {e}");
+        }
+    }
+
+    fn summarize_botting_status(tabs: &[AndroidTab]) -> (bool, String, String) {
+        let mut lines: Vec<String> = Vec::new();
+        for tab in tabs {
+            let bot_on = tab.bot.runner.is_running();
+            let maid_on = tab.bot.maid.is_running();
+            let aa_on = tab.bot.auto_attack.is_running();
+            if !bot_on && !maid_on && !aa_on {
+                continue;
+            }
+            let snap = tab.bot.player_snapshot();
+            let who = if snap.logged_in && !snap.username.trim().is_empty() {
+                snap.username
+            } else {
+                format!("Account #{}", tab.id)
+            };
+            let mut modes = Vec::new();
+            if bot_on {
+                modes.push("Bot");
+            }
+            if maid_on {
+                modes.push("Maid");
+            }
+            if aa_on {
+                modes.push("Auto");
+            }
+            let mode_str = modes.join(" + ");
+            if !snap.map.is_empty() {
+                lines.push(format!("{who} · {} [{mode_str}]", snap.map));
+            } else {
+                lines.push(format!("{who} [{mode_str}]"));
+            }
+        }
+        if lines.is_empty() {
+            return (false, String::new(), String::new());
+        }
+        let title = if lines.len() == 1 {
+            "Grimlite Ri — Bot Running".to_string()
+        } else {
+            format!("Grimlite Ri — {} Bots Running", lines.len())
+        };
+        (true, title, lines.join("\n"))
+    }
+
+    fn resize_tab_viewport(
+        tab: &mut AndroidTab,
+        win_w: u32,
+        win_h: u32,
+        ppp: f32,
+        rail_collapsed: bool,
+    ) {
         let (_, _, _, _, drawn_w, drawn_h, render_scale) =
-            compute_game_layout(win_w, win_h, ppp, false);
+            compute_game_layout(win_w, win_h, ppp, false, rail_collapsed);
         let mut p = TabPlayerGuard::lock(&tab.player, &tab.segments);
         p.set_viewport_dimensions(ViewportDimensions {
             width: drawn_w,
@@ -617,6 +853,7 @@ mod runtime {
         tabs: &mut Vec<AndroidTab>,
         active_idx: &mut usize,
         next_tab_id: &mut u64,
+        rail_collapsed: &mut bool,
         egui_ime_active: &mut bool,
         kb_draft: &mut String,
         kb_masked: &mut bool,
@@ -625,6 +862,7 @@ mod runtime {
         ui_due: &mut Option<Instant>,
         needs_game_render: &mut bool,
     ) {
+        let prev_collapsed = *rail_collapsed;
         let mut raw_input = RawInput {
             screen_rect: Some(Rect::from_min_size(
                 Pos2::ZERO,
@@ -671,14 +909,18 @@ mod runtime {
         // Note: NO `CentralPanel` `ui.image` here — the game texture is blitted directly onto the
         // surface via `GpuBlit` (`BlendState::REPLACE`) underneath egui's chrome & windows!
         let mut full_output = egui_ctx.run_ui(raw_input, |ui| {
-            tab_action =
-                grimlite_egui::show_tabs(ui, TabLayout::LeftRail, &descriptors_ui, active_id);
             if let Some(tab) = tabs.get_mut(*active_idx) {
-                tab.ui.show(egui_ctx, ui);
+                tab_action = tab.ui.show_mobile(
+                    egui_ctx,
+                    ui,
+                    &descriptors_ui,
+                    active_id,
+                    rail_collapsed,
+                );
 
                 if flash_kb_visible {
                     egui::Panel::top("grimlite_android_kb_bar")
-                        .exact_size(34.0)
+                        .exact_size(MOBILE_KB_BAR_HEIGHT)
                         .frame(
                             egui::Frame::new()
                                 .fill(grimlite_egui::theme::Palette::BG_SURFACE)
@@ -784,6 +1026,13 @@ mod runtime {
             }
         }
 
+        if *rail_collapsed != prev_collapsed {
+            for tab in tabs.iter_mut() {
+                resize_tab_viewport(tab, cfg.width, cfg.height, scale_factor, *rail_collapsed);
+            }
+            *needs_game_render = true;
+        }
+
         match tab_action {
             TabBarAction::NewTab => {
                 let tab = spawn_tab(
@@ -799,6 +1048,7 @@ mod runtime {
                     cfg.width,
                     cfg.height,
                     scale_factor,
+                    *rail_collapsed,
                 );
                 *next_tab_id += 1;
                 tabs.push(tab);
@@ -883,8 +1133,13 @@ mod runtime {
                         >(p.renderer())
                         .map(|r| r.target())
                     {
-                        let (left_px, top_px, raw_w, raw_h, _, _, _) =
-                            compute_game_layout(cfg.width, cfg.height, scale_factor, flash_kb_visible);
+                        let (left_px, top_px, raw_w, raw_h, _, _, _) = compute_game_layout(
+                            cfg.width,
+                            cfg.height,
+                            scale_factor,
+                            flash_kb_visible,
+                            *rail_collapsed,
+                        );
                         pass.set_viewport(
                             left_px,
                             top_px,
@@ -957,6 +1212,7 @@ mod runtime {
         let mut tabs: Vec<AndroidTab> = Vec::new();
         let mut active_idx: usize = 0;
         let mut next_tab_id: u64 = 1;
+        let mut rail_collapsed = false;
         let mut paused = false;
         let mut egui_ime_active = false;
         let mut kb_draft = String::new();
@@ -971,6 +1227,8 @@ mod runtime {
         let mut last_draw = Instant::now() - Duration::from_secs(1);
         let mut last_picture = Instant::now() - Duration::from_secs(1);
         let mut last_shape_sweep = Instant::now();
+        let mut last_notif_check = Instant::now() - Duration::from_secs(2);
+        let mut last_notif_state: (bool, String, String) = (false, String::new(), String::new());
         let mut touch_on_ui = false;
 
         #[allow(clippy::too_many_arguments)]
@@ -984,6 +1242,7 @@ mod runtime {
             ime_reset_flag: &Arc<AtomicBool>,
             egui_ctx: &Context,
             scale_factor: f32,
+            rail_collapsed: bool,
             egui_ime_active: bool,
             descriptors: &mut Option<Arc<Descriptors>>,
             blit: &mut Option<Arc<GpuBlit>>,
@@ -1030,7 +1289,7 @@ mod runtime {
                                     surf.configure(&desc.device, cfg);
                                 }
                                 for tab in tabs.iter_mut() {
-                                    resize_tab_viewport(tab, w, h, scale_factor);
+                                    resize_tab_viewport(tab, w, h, scale_factor, rail_collapsed);
                                 }
                                 *surface = Some(surf);
                                 *held_window = Some(native_win);
@@ -1064,6 +1323,7 @@ mod runtime {
                                     w,
                                     h,
                                     scale_factor,
+                                    rail_collapsed,
                                 );
                                 *next_tab_id += 1;
                                 tabs.push(tab);
@@ -1095,7 +1355,7 @@ mod runtime {
                             cfg.height = h;
                             surf.configure(&desc.device, cfg);
                             for tab in tabs.iter_mut() {
-                                resize_tab_viewport(tab, w, h, scale_factor);
+                                resize_tab_viewport(tab, w, h, scale_factor, rail_collapsed);
                             }
                             *needs_game_render = true;
                             *ui_dirty = true;
@@ -1105,14 +1365,23 @@ mod runtime {
                 EngineMsg::Touch { kind, px, py } => {
                     let logical = Pos2::new(px / scale_factor, py / scale_factor);
                     let flash_kb_bar = kb_open.load(Ordering::Acquire) && !egui_ime_active;
-                    let top_chrome_h = if flash_kb_bar {
-                        NAV_BAR_HEIGHT + 34.0
+                    let rail_w = if rail_collapsed {
+                        0.0
                     } else {
-                        NAV_BAR_HEIGHT
+                        MOBILE_RAIL_WIDTH
                     };
+                    let top_chrome_h = if flash_kb_bar {
+                        MOBILE_KB_BAR_HEIGHT
+                    } else {
+                        0.0
+                    };
+                    let flyout_open = tabs
+                        .get(*active_idx)
+                        .is_some_and(|t| t.ui.has_active_flyout());
                     if matches!(kind, TouchKind::Down) {
-                        *touch_on_ui = px < TAB_RAIL_WIDTH * scale_factor
+                        *touch_on_ui = px < rail_w * scale_factor
                             || py < top_chrome_h * scale_factor
+                            || flyout_open
                             || egui_ctx
                                 .layer_id_at(logical)
                                 .is_some_and(|l| l.order != egui::Order::Background);
@@ -1130,8 +1399,13 @@ mod runtime {
                         let (win_w, win_h) = surface_config
                             .as_ref()
                             .map_or((1920, 1080), |c| (c.width, c.height));
-                        let (left_px, top_px, _, _, _, _, render_scale) =
-                            compute_game_layout(win_w, win_h, scale_factor, flash_kb_bar);
+                        let (left_px, top_px, _, _, _, _, render_scale) = compute_game_layout(
+                            win_w,
+                            win_h,
+                            scale_factor,
+                            flash_kb_bar,
+                            rail_collapsed,
+                        );
                         let gx = f64::from((px - left_px).max(0.0)) * render_scale;
                         let gy = f64::from((py - top_px).max(0.0)) * render_scale;
                         match kind {
@@ -1279,6 +1553,45 @@ mod runtime {
                         answer_flash_call(None, req);
                     }
                 }
+                EngineMsg::DocumentPicked { tab_id, kind, path } => {
+                    if let Some(raw_path) = path {
+                        let picked = PathBuf::from(&raw_path);
+                        if let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id) {
+                            match kind {
+                                DOC_PICK_LAG_IMAGE => tab.ui.apply_picked_lag_killer_image(&picked),
+                                DOC_PICK_GBOT => tab.ui.apply_picked_gbot(&picked),
+                                DOC_PICK_MAID_JSON => tab.ui.apply_picked_maid_json(&picked),
+                                _ => {}
+                            }
+                            *ui_dirty = true;
+                        }
+                        let _ = std::fs::remove_file(&picked);
+                        if let Some(parent) = picked.parent() {
+                            let _ = std::fs::remove_dir(parent);
+                        }
+                    }
+                }
+                EngineMsg::DocumentSaved { tab_id, kind, name } => {
+                    if let Some(saved_name) = name
+                        && let Some(tab) = tabs.iter_mut().find(|t| t.id == tab_id)
+                    {
+                        match kind {
+                            DOC_SAVE_GBOT => tab.ui.notify_saved_gbot(&saved_name),
+                            DOC_SAVE_MAID_JSON => tab.ui.notify_saved_maid_json(&saved_name),
+                            _ => {}
+                        }
+                        *ui_dirty = true;
+                    }
+                }
+                EngineMsg::StopAllBots => {
+                    for tab in tabs.iter() {
+                        tab.bot.stop_bot();
+                        tab.bot.auto_attack.stop(tab.bot.clone());
+                        tab.bot.maid.stop(&tab.bot);
+                    }
+                    jni_update_bot_service(app, false, "", "");
+                    *ui_dirty = true;
+                }
             }
             false
         }
@@ -1287,6 +1600,15 @@ mod runtime {
         loop {
             let now = Instant::now();
             let mut next_frame = now + Duration::from_millis(42);
+
+            if now.duration_since(last_notif_check) >= Duration::from_secs(1) {
+                last_notif_check = now;
+                let desired = summarize_botting_status(&tabs);
+                if desired != last_notif_state {
+                    jni_update_bot_service(&app, desired.0, &desired.1, &desired.2);
+                    last_notif_state = desired;
+                }
+            }
 
             if !paused {
                 let dt = FloatDuration::from_std(now.duration_since(last_tick));
@@ -1394,6 +1716,7 @@ mod runtime {
                         &mut tabs,
                         &mut active_idx,
                         &mut next_tab_id,
+                        &mut rail_collapsed,
                         &mut egui_ime_active,
                         &mut kb_draft,
                         &mut kb_masked,
@@ -1404,15 +1727,55 @@ mod runtime {
                     );
                 }
             } else {
+                // App is minimized or screen is off: zero GPU rendering, while keeping active
+                // bots/Maid/AutoAttack ticking at a lean 10 FPS headless cadence (protected by
+                // GrimliteService's foreground notification + PARTIAL_WAKE_LOCK).
+                let dt = FloatDuration::from_std(
+                    now.duration_since(last_tick).min(Duration::from_millis(250)),
+                );
                 last_tick = now;
-                next_frame = now + Duration::from_millis(250);
+
+                let mut any_botting = false;
+                for tab in tabs.iter_mut() {
+                    let bot_busy = !tab.bot.is_game_loaded()
+                        || tab.bot.runner.is_running()
+                        || tab.bot.auto_attack.is_running()
+                        || tab.bot.maid.is_running();
+                    if bot_busy {
+                        any_botting = true;
+                        if let Some(mut p) = TabPlayerGuard::try_lock(&tab.player, &tab.segments) {
+                            if p.mouse_in_stage() {
+                                p.set_mouse_in_stage(false);
+                                p.handle_event(PlayerEvent::MouseLeave);
+                            }
+                            p.tick(dt);
+                        }
+                    } else if tab.bot.is_logged_in() {
+                        tab.bg_accum_ms += dt.as_millis();
+                        if tab.bg_accum_ms >= 500.0 {
+                            let step_ms = tab.bg_accum_ms.min(500.0);
+                            tab.bg_accum_ms = 0.0;
+                            if let Some(mut p) =
+                                TabPlayerGuard::try_lock(&tab.player, &tab.segments)
+                            {
+                                p.tick(FloatDuration::from_millis(step_ms));
+                            }
+                        }
+                    }
+                }
+                next_frame = Instant::now()
+                    + if any_botting {
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::from_millis(500)
+                    };
             }
 
             // Inner loop: drains async tasks, FlashCalls, and touch/key events UNTIL `next_frame`
             // without running premature SWF ticks or stealing a due game frame's vsync slot!
             loop {
                 let now = Instant::now();
-                if !paused && now >= next_frame {
+                if now >= next_frame {
                     break;
                 }
                 let ui_wake = if !paused && (ui_dirty || ui_due.is_some()) {
@@ -1439,6 +1802,7 @@ mod runtime {
                             &ime_reset_flag,
                             &egui_ctx,
                             scale_factor,
+                            rail_collapsed,
                             egui_ime_active,
                             &mut descriptors,
                             &mut blit,
@@ -1470,6 +1834,7 @@ mod runtime {
                                 &ime_reset_flag,
                                 &egui_ctx,
                                 scale_factor,
+                                rail_collapsed,
                                 egui_ime_active,
                                 &mut descriptors,
                                 &mut blit,
@@ -1500,7 +1865,7 @@ mod runtime {
                 }
 
                 let now = Instant::now();
-                if !paused && now >= next_frame {
+                if now >= next_frame {
                     break;
                 }
 
@@ -1548,6 +1913,7 @@ mod runtime {
                         &mut tabs,
                         &mut active_idx,
                         &mut next_tab_id,
+                        &mut rail_collapsed,
                         &mut egui_ime_active,
                         &mut kb_draft,
                         &mut kb_masked,
@@ -1593,10 +1959,14 @@ mod runtime {
         let data_dir = app
             .internal_data_path()
             .unwrap_or_else(|| PathBuf::from("/data/local/tmp/grimlite-ri"));
+        grimlite_bot::options::set_cache_dir(data_dir.join("cache"));
         let swf_path = ensure_host_swf(&data_dir);
         let swf_url = Url::from_file_path(&swf_path).expect("host swf file url");
 
         let (engine_tx, engine_rx) = mpsc::channel::<EngineMsg>();
+        if let Ok(mut slot) = GLOBAL_ENGINE_TX.get_or_init(|| Mutex::new(None)).lock() {
+            *slot = Some(engine_tx.clone());
+        }
         let kb_open = Arc::new(AtomicBool::new(false));
         let ime_reset_flag = Arc::new(AtomicBool::new(false));
 
@@ -1739,6 +2109,12 @@ mod runtime {
         }
 
         let _ = engine_handle.join();
+        if let Some(slot) = GLOBAL_ENGINE_TX.get()
+            && let Ok(mut guard) = slot.lock()
+        {
+            *guard = None;
+        }
+        jni_update_bot_service(&app, false, "", "");
     }
 }
 
@@ -1746,4 +2122,61 @@ mod runtime {
 #[unsafe(no_mangle)]
 pub fn android_main(app: android_activity::AndroidApp) {
     runtime::run(app);
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_grimlite_ri_MainActivity_nativeOnDocumentPicked<'local>(
+    mut unowned_env: jni::EnvUnowned<'local>,
+    _class: jni::objects::JClass<'local>,
+    tab_id: jni::sys::jlong,
+    kind: jni::sys::jint,
+    path: jni::objects::JString<'local>,
+) {
+    let resolved = unowned_env
+        .with_env(|env| -> jni::errors::Result<Option<String>> {
+            if path.is_null() {
+                return Ok(None);
+            }
+            Ok(Some(path.try_to_string(env)?))
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>();
+    runtime::send_global_engine_msg(runtime::EngineMsg::DocumentPicked {
+        tab_id: tab_id as u64,
+        kind,
+        path: resolved,
+    });
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_grimlite_ri_MainActivity_nativeOnDocumentSaved<'local>(
+    mut unowned_env: jni::EnvUnowned<'local>,
+    _class: jni::objects::JClass<'local>,
+    tab_id: jni::sys::jlong,
+    kind: jni::sys::jint,
+    name: jni::objects::JString<'local>,
+) {
+    let resolved = unowned_env
+        .with_env(|env| -> jni::errors::Result<Option<String>> {
+            if name.is_null() {
+                return Ok(None);
+            }
+            Ok(Some(name.try_to_string(env)?))
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>();
+    runtime::send_global_engine_msg(runtime::EngineMsg::DocumentSaved {
+        tab_id: tab_id as u64,
+        kind,
+        name: resolved,
+    });
+}
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "C" fn Java_com_grimlite_ri_MainActivity_nativeStopAllBots(
+    _env: jni::EnvUnowned<'_>,
+    _class: jni::objects::JClass<'_>,
+) {
+    runtime::send_global_engine_msg(runtime::EngineMsg::StopAllBots);
 }
