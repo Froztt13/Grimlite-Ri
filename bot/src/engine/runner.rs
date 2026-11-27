@@ -283,9 +283,18 @@ impl BotRunner {
                     }
 
                     let snap = bot.player_snapshot();
-                    if !snap.alive && config.restart_upon_death {
+                    if config.restart_upon_death
+                        && snap.max_hp > 0
+                        && (!snap.alive || snap.hp <= 0)
+                    {
                         bot.logs.push_debug("[Bot] Player died — waiting to respawn & restarting");
-                        sleep_interruptible(2000, &running);
+                        while running.load(Ordering::Acquire) {
+                            sleep_interruptible(500, &running);
+                            let s = bot.player_snapshot();
+                            if s.alive && s.hp > 0 {
+                                break;
+                            }
+                        }
                         index.store(0, Ordering::Release);
                         continue;
                     }

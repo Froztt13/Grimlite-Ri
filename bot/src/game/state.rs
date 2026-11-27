@@ -5,7 +5,7 @@ use crate::capture::{Interceptor, MessageInfo};
 use crate::log::LogBuffer;
 use parking_lot::RwLock;
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Deserialize)]
@@ -90,6 +90,7 @@ pub struct GameState {
     pub room_id: RwLock<i32>,
     pub drops: RwLock<HashMap<i32, DropItem>>,
     pub inventory: RwLock<Vec<SimpleItem>>,
+    pub equipped_ids: RwLock<HashSet<i32>>,
     pub temp_inventory: RwLock<Vec<SimpleItem>>,
     pub bank: RwLock<Vec<SimpleItem>>,
     pub quests: RwLock<HashMap<i32, QuestInfo>>,
@@ -510,6 +511,21 @@ impl StatePacketInterceptor {
                         if let Some(gold) = json_i64(data.get("intGold")) {
                             p.gold = gold;
                         }
+                        drop(p);
+                        if let Some(eqp) = data.get("eqp").and_then(|e| e.as_object()) {
+                            let mut eq_set = self.state.equipped_ids.write();
+                            for slot_val in eqp.values() {
+                                if let Some(item_id) = json_i64(slot_val.get("ItemID")) {
+                                    eq_set.insert(item_id as i32);
+                                }
+                            }
+                            let mut inv = self.state.inventory.write();
+                            for it in inv.iter_mut() {
+                                if eq_set.contains(&it.id) {
+                                    it.equipped = true;
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -553,14 +569,38 @@ impl StatePacketInterceptor {
                             if let Some(gold) = json_i64(data.get("intGold")) {
                                 p.gold = gold;
                             }
+                            drop(p);
+                            if let Some(eqp) = data.get("eqp").and_then(|e| e.as_object()) {
+                                let mut eq_set = self.state.equipped_ids.write();
+                                for slot_val in eqp.values() {
+                                    if let Some(item_id) = json_i64(slot_val.get("ItemID")) {
+                                        eq_set.insert(item_id as i32);
+                                    }
+                                }
+                                let mut inv = self.state.inventory.write();
+                                for it in inv.iter_mut() {
+                                    if eq_set.contains(&it.id) {
+                                        it.equipped = true;
+                                    }
+                                }
+                            }
                         }
                     }
                 }
             }
             "loadInventoryBig" => {
                 if let Some(items) = o.get("items").and_then(|i| i.as_array()) {
-                    let parsed: Vec<SimpleItem> =
-                        items.iter().filter_map(parse_simple_item).collect();
+                    let eq_set = self.state.equipped_ids.read();
+                    let parsed: Vec<SimpleItem> = items
+                        .iter()
+                        .filter_map(parse_simple_item)
+                        .map(|mut it| {
+                            if eq_set.contains(&it.id) {
+                                it.equipped = true;
+                            }
+                            it
+                        })
+                        .collect();
                     *self.state.inventory.write() = parsed;
                 }
                 if let Some(temps) = o.get("tempitems").and_then(|i| i.as_array()) {
@@ -880,6 +920,17 @@ fn equip_slot_group(category: &str) -> &'static str {
     }
 }
 
+fn json_bool(v: Option<&serde_json::Value>) -> bool {
+    match v {
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(serde_json::Value::Number(n)) => n.as_i64().unwrap_or(0) != 0,
+        Some(serde_json::Value::String(s)) => {
+            s == "1" || s.eq_ignore_ascii_case("true")
+        }
+        _ => false,
+    }
+}
+
 fn parse_simple_item(v: &serde_json::Value) -> Option<SimpleItem> {
     let id = json_i64(v.get("ItemID"))? as i32;
     let char_item_id = json_i64(v.get("CharItemID")).unwrap_or(0) as i32;
@@ -890,8 +941,8 @@ fn parse_simple_item(v: &serde_json::Value) -> Option<SimpleItem> {
         .and_then(|x| x.as_str())
         .unwrap_or("")
         .to_string();
-    let is_ac = json_i64(v.get("bCoins")).unwrap_or(0) == 1;
-    let equipped = json_i64(v.get("bEquip")).unwrap_or(0) == 1;
+    let is_ac = json_bool(v.get("bCoins"));
+    let equipped = json_bool(v.get("bEquip")) || json_bool(v.get("bEquipped"));
     Some(SimpleItem {
         id,
         char_item_id,

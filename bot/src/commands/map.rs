@@ -4,26 +4,11 @@
 use super::CommandContext;
 use crate::gbot::BotCommand;
 use crate::host::FlashArg;
-use std::sync::atomic::Ordering;
 
 pub fn execute(ctx: &mut CommandContext<'_>, cmd: &BotCommand) -> usize {
     match cmd {
         BotCommand::Join { map, cell, pad } => {
             ensure_in_map_and_cell(ctx, map, cell, pad);
-        }
-        BotCommand::Yulgar => {
-            ctx.exit_combat_in_place(1250);
-            if !ctx.bot.player_snapshot().map.eq_ignore_ascii_case("yulgar") {
-                join_map_wait(ctx, "yulgar", "Enter", "Spawn", 2);
-            }
-            let seed = pseudo_rand_u32();
-            let rx = 150 + (seed % 550) as i32;
-            let ry = 320 + ((seed / 7) % 130) as i32;
-            let _ = ctx
-                .flash
-                .call_bool("walkTo", &[FlashArg::from(rx), FlashArg::from(ry)]);
-            ctx.running.store(false, Ordering::Release);
-            return ctx.idx;
         }
         BotCommand::MoveToCell { cell, pad } => {
             let c = ctx.resolve(cell);

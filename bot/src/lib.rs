@@ -1,24 +1,18 @@
 //! Grimlite Ri core bot engine (no Ruffle or UI dependencies).
 
-pub mod auto_attack;
-pub mod capture;
 pub mod commands;
-pub mod dps;
-pub mod flash;
-pub mod gbot;
-pub mod grabber;
-pub mod handlers;
-pub mod host;
+pub mod engine;
+pub mod game;
 pub mod log;
-pub mod options;
-pub mod runner;
-pub mod spammer;
-pub mod state;
-pub mod tamper;
+pub mod network;
+
+// Convenience re-exports for clean crate-root imports
+pub use engine::{auto_attack, gbot, options, runner};
+pub use game::{flash, grabber, host, state};
+pub use network::{capture, handlers, spammer, tamper};
 
 use crate::auto_attack::AutoAttack;
 use crate::capture::CaptureProxy;
-use crate::dps::{DpsMeter, DpsPacketInterceptor};
 use crate::flash::Flash;
 use crate::gbot::BotConfig;
 use crate::handlers::{AntiCounterHandler, SpecialHandlerManager};
@@ -50,7 +44,6 @@ pub struct Bot {
     pub auto_attack: Arc<AutoAttack>,
     pub anti_counter: Arc<AntiCounterHandler>,
     pub special_handler: Arc<SpecialHandlerManager>,
-    pub dps: Arc<DpsMeter>,
     game_loaded: AtomicBool,
     worker_started: AtomicBool,
 }
@@ -61,7 +54,6 @@ impl Bot {
         let logs = Arc::new(LogBuffer::default());
         let state = Arc::new(GameState::default());
         let tamper = Arc::new(TamperEngine::default());
-        let dps = Arc::new(DpsMeter::default());
         let anti_counter = Arc::new(AntiCounterHandler::new(logs.clone()));
         let special_handler = Arc::new(SpecialHandlerManager::new(logs.clone()));
 
@@ -69,7 +61,6 @@ impl Bot {
             state.clone(),
             logs.clone(),
         )));
-        capture.add_interceptor(Arc::new(DpsPacketInterceptor::new(dps.clone())));
         capture.add_interceptor(anti_counter.clone());
         capture.add_interceptor(special_handler.clone());
         capture.add_interceptor(tamper.clone());
@@ -87,7 +78,6 @@ impl Bot {
             auto_attack: Arc::new(AutoAttack::default()),
             anti_counter: anti_counter.clone(),
             special_handler: special_handler.clone(),
-            dps,
             game_loaded: AtomicBool::new(false),
             worker_started: AtomicBool::new(false),
         });
@@ -277,8 +267,9 @@ impl Bot {
                                 bot.auto_attack.stop(Arc::clone(&bot));
                             }
                             if bot.runner.is_running() && !bot.runner.config().auto_relogin {
-                                bot.logs
-                                    .push_debug("[Bot] Stopped (logged out, auto-relogin disabled)");
+                                bot.logs.push_debug(
+                                    "[Bot] Stopped (logged out, auto-relogin disabled)",
+                                );
                                 bot.stop_bot();
                             }
                         }
@@ -291,10 +282,8 @@ impl Bot {
                             "setInfiniteRange",
                             &[FlashArg::Bool(desired.infinite_range)],
                         );
-                        let _ = flash.call_bool(
-                            "setEnemyMagnet",
-                            &[FlashArg::Bool(desired.enemy_magnet)],
-                        );
+                        let _ = flash
+                            .call_bool("setEnemyMagnet", &[FlashArg::Bool(desired.enemy_magnet)]);
                         let _ =
                             flash.call_bool("setLagKiller", &[FlashArg::Bool(desired.lag_killer)]);
                         let _ = flash.call_bool(
