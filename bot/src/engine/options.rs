@@ -113,7 +113,7 @@ impl Default for BotOptions {
             anti_counter: true,
             follow_enabled: false,
             follow_player: String::new(),
-            fps: 24,
+            fps: 30,
         }
     }
 }

@@ -55,7 +55,23 @@ public class Main extends MovieClip {
     private var optWalkSpeed:int = 8;
     private var stateFrameCounter:int = 0;
     private var optFrameCounter:int = 0;
-    private var lastPushedState:String = "";
+    private var hasPushedState:Boolean = false;
+    private var lastLoggedIn:Boolean = false;
+    private var lastUsername:String = "";
+    private var lastHp:int = 0;
+    private var lastMaxHp:int = 0;
+    private var lastMp:int = 0;
+    private var lastMaxMp:int = 0;
+    private var lastLevel:int = 0;
+    private var lastGold:int = 0;
+    private var lastMap:String = "";
+    private var lastCell:String = "";
+    private var lastPad:String = "";
+    private var lastState:int = 0;
+    private var lastAlive:Boolean = false;
+    private var lastTargetName:String = "";
+    private var lastTargetHp:int = 0;
+    private var lastTargetMaxHp:int = 0;
 
     public function Main() {
         super();
@@ -318,11 +334,121 @@ public class Main extends MovieClip {
     }
 
     private function pushPlayerStateIfChanged():void {
-        var json:String = getPlayerState();
-        if (json != lastPushedState) {
-            lastPushedState = json;
-            callHost("playerState", [json]);
+        var loggedIn:Boolean = false;
+        var uname:String = "";
+        var hp:int = 0;
+        var maxHp:int = 0;
+        var mp:int = 0;
+        var maxMp:int = 0;
+        var level:int = 0;
+        var gold:int = 0;
+        var mapName:String = "";
+        var cellName:String = "";
+        var padName:String = "";
+        var pState:int = 0;
+        var alive:Boolean = false;
+        var targetName:String = "";
+        var targetHp:int = 0;
+        var targetMaxHp:int = 0;
+        try {
+            if (game != null && game.sfc != null && game.sfc.isConnected && game.world != null && game.world.myAvatar != null) {
+                var av:* = game.world.myAvatar;
+                var data:* = av.objData;
+                var leaf:* = av.dataLeaf;
+                loggedIn = true;
+                if (data != null) {
+                    uname = String(data.strUsername || "");
+                    level = int(data.intLevel);
+                    gold = int(data.intGold);
+                }
+                if (leaf != null) {
+                    hp = int(leaf.intHP);
+                    maxHp = int(leaf.intHPMax);
+                    mp = int(leaf.intMP);
+                    maxMp = int(leaf.intMPMax);
+                    pState = int(leaf.intState);
+                    alive = hp > 0 && pState > 0;
+                } else if (data != null) {
+                    hp = int(data.intHP);
+                    maxHp = int(data.intHPMax);
+                    mp = int(data.intMP);
+                    maxMp = int(data.intMPMax);
+                    pState = int(data.intState);
+                    alive = maxHp == 0 || (hp > 0 && pState > 0);
+                }
+                mapName = String(game.world.strMapName || "");
+                cellName = String(game.world.strFrame || "");
+                padName = String(game.world.strPad || "");
+                if (av.target != null) {
+                    if (av.target.objData != null) {
+                        targetName = String(av.target.objData.strMonName || av.target.objData.strUsername || "");
+                    }
+                    var tLeaf:* = av.target.dataLeaf != null ? av.target.dataLeaf : av.target.objData;
+                    if (tLeaf != null) {
+                        targetHp = int(tLeaf.intHP);
+                        targetMaxHp = int(tLeaf.intHPMax);
+                    }
+                }
+            }
+        } catch (e:Error) {}
+
+        if (hasPushedState &&
+            loggedIn == lastLoggedIn &&
+            hp == lastHp &&
+            maxHp == lastMaxHp &&
+            mp == lastMp &&
+            maxMp == lastMaxMp &&
+            level == lastLevel &&
+            gold == lastGold &&
+            pState == lastState &&
+            alive == lastAlive &&
+            targetHp == lastTargetHp &&
+            targetMaxHp == lastTargetMaxHp &&
+            uname == lastUsername &&
+            mapName == lastMap &&
+            cellName == lastCell &&
+            padName == lastPad &&
+            targetName == lastTargetName) {
+            return;
         }
+
+        hasPushedState = true;
+        lastLoggedIn = loggedIn;
+        lastUsername = uname;
+        lastHp = hp;
+        lastMaxHp = maxHp;
+        lastMp = mp;
+        lastMaxMp = maxMp;
+        lastLevel = level;
+        lastGold = gold;
+        lastMap = mapName;
+        lastCell = cellName;
+        lastPad = padName;
+        lastState = pState;
+        lastAlive = alive;
+        lastTargetName = targetName;
+        lastTargetHp = targetHp;
+        lastTargetMaxHp = targetMaxHp;
+
+        var json:String = JSON.stringify({
+            loggedIn: loggedIn,
+            username: uname,
+            hp: hp,
+            maxHp: maxHp,
+            mp: mp,
+            maxMp: maxMp,
+            level: level,
+            gold: gold,
+            map: mapName,
+            cell: cellName,
+            pad: padName,
+            state: pState,
+            alive: alive,
+            targetName: targetName,
+            targetHp: targetHp,
+            targetMaxHp: targetMaxHp
+        });
+        callHost("playerState", [json]);
     }
 
     // ---- Auth & Player State ----

@@ -5,6 +5,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -119,6 +120,14 @@ class GrimliteService : Service() {
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            Log.i(TAG, "GrimliteService.onTrimMemory(level=$level) -> trimming GPU/shape caches")
+            MainActivity.nativeTrimMemory(level)
+        }
+    }
 
     private fun buildNotification(title: String, text: String): Notification {
         val openIntent = PendingIntent.getActivity(

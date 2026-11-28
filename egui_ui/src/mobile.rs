@@ -18,9 +18,6 @@ use grimlite_bot::host::FlashArg;
 /// Width of the mobile left icon toolbar in logical points.
 pub const MOBILE_RAIL_WIDTH: f32 = 54.0;
 
-/// Height of the floating Flash text-input preview bar shown above the soft keyboard.
-pub const MOBILE_KB_BAR_HEIGHT: f32 = 36.0;
-
 /// Key in `egui::Context::data` storing the available canvas rect to the right of the mobile rail.
 pub(crate) const MOBILE_CONSTRAIN_RECT_KEY: &str = "grimlite_mobile_constrain_rect";
 
@@ -74,32 +71,45 @@ impl GrimliteUi {
         }
 
         // Keep cell list synced whenever the player enters a new map even while popovers are closed.
-        let snap = self.bot.player_snapshot();
-        if snap.logged_in && self.tools.accounts.open {
-            self.tools.accounts.open = false;
-        }
-        if snap.logged_in && !snap.map.is_empty() && snap.map != self.last_map_name {
-            self.last_map_name = snap.map.clone();
-            self.last_cell_name = snap.cell.clone();
-            self.last_pad_name = snap.pad.clone();
-            if !snap.cell.is_empty() {
-                self.jump_cell = snap.cell.clone();
+        // Borrow under a short read lock instead of cloning `PlayerSnapshot` strings every frame.
+        let mut logged_in = false;
+        let mut refresh_cells = false;
+        let mut refresh_pads = false;
+        self.bot.read_player(|snap| {
+            logged_in = snap.logged_in;
+            if snap.logged_in && self.tools.accounts.open {
+                self.tools.accounts.open = false;
             }
-            if !snap.pad.is_empty() {
-                self.jump_pad = snap.pad.clone();
+            if snap.logged_in && !snap.map.is_empty() && snap.map != self.last_map_name {
+                self.last_map_name.clone_from(&snap.map);
+                self.last_cell_name.clone_from(&snap.cell);
+                self.last_pad_name.clone_from(&snap.pad);
+                if !snap.cell.is_empty() {
+                    self.jump_cell.clone_from(&snap.cell);
+                }
+                if !snap.pad.is_empty() {
+                    self.jump_pad.clone_from(&snap.pad);
+                }
+                refresh_cells = true;
+            } else if snap.logged_in && !snap.cell.is_empty() && snap.cell != self.last_cell_name {
+                self.last_cell_name.clone_from(&snap.cell);
+                self.last_pad_name.clone_from(&snap.pad);
+                if !snap.cell.is_empty() {
+                    self.jump_cell.clone_from(&snap.cell);
+                }
+                if !snap.pad.is_empty() {
+                    self.jump_pad.clone_from(&snap.pad);
+                }
+                refresh_pads = true;
+            } else if snap.logged_in && !snap.pad.is_empty() && snap.pad != self.last_pad_name {
+                self.last_pad_name.clone_from(&snap.pad);
+                self.jump_pad.clone_from(&snap.pad);
             }
+        });
+        if refresh_cells {
             self.bot.refresh_map_cells();
-        } else if snap.logged_in && !snap.cell.is_empty() && snap.cell != self.last_cell_name {
-            self.last_cell_name = snap.cell.clone();
-            self.last_pad_name = snap.pad.clone();
-            self.jump_cell = snap.cell.clone();
-            if !snap.pad.is_empty() {
-                self.jump_pad = snap.pad.clone();
-            }
+        } else if refresh_pads {
             self.bot.refresh_available_pads();
-        } else if snap.logged_in && !snap.pad.is_empty() && snap.pad != self.last_pad_name {
-            self.last_pad_name = snap.pad.clone();
-            self.jump_pad = snap.pad.clone();
         }
 
         let screen = ctx.content_rect();
@@ -126,8 +136,9 @@ impl GrimliteUi {
                 || tabs.iter().any(|t| t.bot_running);
             show_collapsed_handle(ctx, any_active, rail_collapsed);
         } else {
-            self.render_left_icon_rail(ctx, egui_ui, tabs, &snap, rail_collapsed);
+            self.render_left_icon_rail(ctx, egui_ui, tabs, logged_in, rail_collapsed);
             if let Some(flyout) = self.mobile_flyout {
+                let snap = self.bot.player_snapshot();
                 tab_action = self.render_mobile_flyout(ctx, flyout, tabs, active_id, &snap);
             }
         }
@@ -152,6 +163,45 @@ impl GrimliteUi {
             self.show_logs_window(ctx);
         }
 
+        if let Some(ref perf) = self.mobile_perf
+            && perf.show_fps()
+        {
+            let fps = perf.rendered_fps();
+            let backend = perf.active_backend();
+            let color = if fps >= 27.0 {
+                Palette::SUCCESS
+            } else if fps >= 18.0 {
+                Palette::WARNING
+            } else {
+                Color32::from_rgb(230, 80, 80)
+            };
+            let label = if backend.is_empty() {
+                format!("{fps:.1} FPS")
+            } else {
+                format!("{fps:.1} FPS · {}", backend.to_ascii_uppercase())
+            };
+            egui::Area::new(Id::new("grimlite_mobile_fps_badge"))
+                .order(Order::Foreground)
+                .interactable(false)
+                .anchor(Align2::RIGHT_TOP, vec2(-8.0, 6.0))
+                .show(ctx, |ui| {
+                    Frame::new()
+                        .fill(Color32::from_rgba_unmultiplied(12, 15, 22, 195))
+                        .stroke(Stroke::new(1.0, Palette::BORDER_SUBTLE))
+                        .corner_radius(CornerRadius::same(6))
+                        .inner_margin(Margin::symmetric(7, 3))
+                        .show(ui, |ui| {
+                            ui.label(
+                                RichText::new(label)
+                                    .monospace()
+                                    .size(11.0)
+                                    .strong()
+                                    .color(color),
+                            );
+                        });
+                });
+        }
+
         tab_action
     }
 
@@ -168,7 +218,7 @@ impl GrimliteUi {
         ctx: &Context,
         egui_ui: &mut Ui,
         tabs: &[TabDescriptor],
-        snap: &grimlite_bot::state::PlayerSnapshot,
+        logged_in: bool,
         rail_collapsed: &mut bool,
     ) {
         let icon_tex_id = self.ensure_app_icon(ctx).id();
@@ -191,7 +241,7 @@ impl GrimliteUi {
                 let avail_h = ui.available_height();
                 if avail_h >= 400.0 {
                     ui.vertical_centered(|ui| {
-                        self.draw_rail_top_items(ui, tabs, snap);
+                        self.draw_rail_top_items(ui, tabs, logged_in);
                     });
                     ui.with_layout(Layout::bottom_up(Align::Center), |ui| {
                         ui.spacing_mut().item_spacing.y = 4.0;
@@ -206,7 +256,7 @@ impl GrimliteUi {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             ui.vertical_centered(|ui| {
-                                self.draw_rail_top_items(ui, tabs, snap);
+                                self.draw_rail_top_items(ui, tabs, logged_in);
                                 ui.add_space(4.0);
                                 self.draw_rail_bottom_items(
                                     ui,
@@ -224,13 +274,13 @@ impl GrimliteUi {
         &mut self,
         ui: &mut Ui,
         tabs: &[TabDescriptor],
-        snap: &grimlite_bot::state::PlayerSnapshot,
+        logged_in: bool,
     ) {
         let bot_running = self.bot.runner.is_running();
         let maid_running = self.bot.maid.is_running();
         let aa_running = self.bot.auto_attack.is_running();
         let any_tab_busy = tabs.iter().any(|t| t.bot_running);
-        let any_tab_logged = snap.logged_in || tabs.iter().any(|t| t.logged_in);
+        let any_tab_logged = logged_in || tabs.iter().any(|t| t.logged_in);
         let opts_active = self.options.lag_killer
             || self.options.hide_players
             || self.options.disable_animations;

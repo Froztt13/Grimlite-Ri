@@ -360,6 +360,12 @@ impl Bot {
         self.state.snapshot()
     }
 
+    /// Borrows the current `PlayerSnapshot` under a short read lock without cloning its strings.
+    pub fn read_player<R>(&self, f: impl FnOnce(&PlayerSnapshot) -> R) -> R {
+        let guard = self.state.player.read();
+        f(&guard)
+    }
+
     pub fn apply_options(&self, opts: BotOptions) {
         self.options.set(opts);
     }

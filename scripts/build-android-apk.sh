@@ -31,6 +31,7 @@ echo "    ANDROID_NDK_HOME=${ANDROID_NDK_HOME:-<unset>}"
 
 NDK_ARGS=(
     ndk
+    --platform 26
     -t "$ABI"
     -o "$ROOT_DIR/android/app/src/main/jniLibs"
     build -p grimlite_android

@@ -16,7 +16,209 @@ use grimlite_bot::host::FlashArg;
 use grimlite_bot::options::BotOptions;
 use std::sync::Arc;
 
-pub use mobile::{MOBILE_KB_BAR_HEIGHT, MOBILE_RAIL_WIDTH};
+pub use mobile::MOBILE_RAIL_WIDTH;
+
+/// User-selected Android graphics backend preference (persisted in `graphics.txt`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MobileGraphicsApi {
+    Auto = 0,
+    Vulkan = 1,
+    Gl = 2,
+}
+
+impl MobileGraphicsApi {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            1 => Self::Vulkan,
+            2 => Self::Gl,
+            _ => Self::Auto,
+        }
+    }
+
+    pub fn from_str_tag(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "vulkan" | "vk" => Self::Vulkan,
+            "gl" | "gles" | "opengl" => Self::Gl,
+            _ => Self::Auto,
+        }
+    }
+
+    pub fn as_str_tag(self) -> &'static str {
+        match self {
+            Self::Auto => "auto",
+            Self::Vulkan => "vulkan",
+            Self::Gl => "gl",
+        }
+    }
+}
+
+/// Offscreen SWF render height preset on Android (persisted in `render_preset.txt`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[repr(u8)]
+pub enum MobileRenderPreset {
+    Native = 0,
+    Balanced660p = 1,
+    Fast540p = 2,
+}
+
+impl MobileRenderPreset {
+    pub fn from_u8(v: u8) -> Self {
+        match v {
+            0 => Self::Native,
+            2 => Self::Fast540p,
+            _ => Self::Balanced660p,
+        }
+    }
+
+    pub fn from_str_tag(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "native" | "full" => Self::Native,
+            "fast" | "540p" => Self::Fast540p,
+            _ => Self::Balanced660p,
+        }
+    }
+
+    pub fn as_str_tag(self) -> &'static str {
+        match self {
+            Self::Native => "native",
+            Self::Balanced660p => "balanced",
+            Self::Fast540p => "fast",
+        }
+    }
+
+    pub fn max_render_height(self) -> Option<u32> {
+        match self {
+            Self::Native => None,
+            Self::Balanced660p => Some(660),
+            Self::Fast540p => Some(540),
+        }
+    }
+}
+
+/// Shared bridge between the Android runtime and `egui_ui` for live performance settings,
+/// presented FPS overlay, and on-demand memory trimming.
+pub struct MobilePerfState {
+    data_dir: std::path::PathBuf,
+    active_backend: std::sync::Mutex<String>,
+    graphics_api: std::sync::atomic::AtomicU8,
+    render_preset: std::sync::atomic::AtomicU8,
+    show_fps: std::sync::atomic::AtomicBool,
+    rendered_fps_x10: std::sync::atomic::AtomicU32,
+    on_free_memory: Box<dyn Fn() + Send + Sync>,
+    free_status: std::sync::Mutex<String>,
+}
+
+impl MobilePerfState {
+    pub fn load(
+        data_dir: std::path::PathBuf,
+        on_free_memory: Box<dyn Fn() + Send + Sync>,
+    ) -> Arc<Self> {
+        let graphics_api = std::fs::read_to_string(data_dir.join("graphics.txt"))
+            .map(|s| MobileGraphicsApi::from_str_tag(&s))
+            .unwrap_or(MobileGraphicsApi::Auto);
+        let render_preset = std::fs::read_to_string(data_dir.join("render_preset.txt"))
+            .map(|s| MobileRenderPreset::from_str_tag(&s))
+            .unwrap_or(MobileRenderPreset::Balanced660p);
+        let show_fps = data_dir.join("show_fps.txt").exists();
+        Arc::new(Self {
+            data_dir,
+            active_backend: std::sync::Mutex::new(String::new()),
+            graphics_api: std::sync::atomic::AtomicU8::new(graphics_api as u8),
+            render_preset: std::sync::atomic::AtomicU8::new(render_preset as u8),
+            show_fps: std::sync::atomic::AtomicBool::new(show_fps),
+            rendered_fps_x10: std::sync::atomic::AtomicU32::new(0),
+            on_free_memory,
+            free_status: std::sync::Mutex::new(String::new()),
+        })
+    }
+
+    pub fn graphics_api(&self) -> MobileGraphicsApi {
+        MobileGraphicsApi::from_u8(self.graphics_api.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn set_graphics_api(&self, api: MobileGraphicsApi) {
+        self.graphics_api
+            .store(api as u8, std::sync::atomic::Ordering::Relaxed);
+        let path = self.data_dir.join("graphics.txt");
+        if api == MobileGraphicsApi::Auto {
+            let _ = std::fs::remove_file(path);
+        } else {
+            let _ = std::fs::write(path, format!("{}\n", api.as_str_tag()));
+        }
+    }
+
+    pub fn render_preset(&self) -> MobileRenderPreset {
+        MobileRenderPreset::from_u8(self.render_preset.load(std::sync::atomic::Ordering::Relaxed))
+    }
+
+    pub fn set_render_preset(&self, preset: MobileRenderPreset) {
+        self.render_preset
+            .store(preset as u8, std::sync::atomic::Ordering::Relaxed);
+        let _ = std::fs::write(
+            self.data_dir.join("render_preset.txt"),
+            format!("{}\n", preset.as_str_tag()),
+        );
+    }
+
+    pub fn show_fps(&self) -> bool {
+        self.show_fps.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn set_show_fps(&self, on: bool) {
+        self.show_fps
+            .store(on, std::sync::atomic::Ordering::Relaxed);
+        let path = self.data_dir.join("show_fps.txt");
+        if on {
+            let _ = std::fs::write(path, "on\n");
+        } else {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    pub fn set_active_backend(&self, backend: &str) {
+        if let Ok(mut guard) = self.active_backend.lock() {
+            guard.clear();
+            guard.push_str(backend);
+        }
+    }
+
+    pub fn active_backend(&self) -> String {
+        self.active_backend
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+
+    pub fn set_rendered_fps(&self, fps: f32) {
+        let clamped = (fps.max(0.0) * 10.0).round() as u32;
+        self.rendered_fps_x10
+            .store(clamped, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn rendered_fps(&self) -> f32 {
+        self.rendered_fps_x10
+            .load(std::sync::atomic::Ordering::Relaxed) as f32
+            / 10.0
+    }
+
+    pub fn trigger_free_memory(&self) {
+        (self.on_free_memory)();
+    }
+
+    pub fn set_free_status(&self, msg: String) {
+        if let Ok(mut guard) = self.free_status.lock() {
+            *guard = msg;
+        }
+    }
+
+    pub fn free_status(&self) -> String {
+        self.free_status
+            .lock()
+            .map(|g| g.clone())
+            .unwrap_or_default()
+    }
+}
 
 pub const TAB_BAR_HEIGHT: f32 = 26.0;
 pub const TAB_RAIL_WIDTH: f32 = MOBILE_RAIL_WIDTH;
@@ -423,6 +625,7 @@ pub struct GrimliteUi {
     app_icon: Option<egui::TextureHandle>,
     resources: system::ResourceMonitor,
     pick_image: Option<FileDialogFn>,
+    mobile_perf: Option<Arc<MobilePerfState>>,
 
     // Header Cell/Pad quick-jump state (Grimlite-Li style)
     jump_cell: String,
@@ -456,6 +659,7 @@ impl GrimliteUi {
             app_icon: None,
             resources: system::ResourceMonitor::default(),
             pick_image: None,
+            mobile_perf: None,
             jump_cell: "Enter".to_string(),
             jump_pad: "Spawn".to_string(),
             last_map_name: String::new(),
@@ -475,6 +679,11 @@ impl GrimliteUi {
 
     pub fn with_image_dialog(mut self, pick_image: Option<FileDialogFn>) -> Self {
         self.pick_image = pick_image;
+        self
+    }
+
+    pub fn with_mobile_perf(mut self, mobile_perf: Arc<MobilePerfState>) -> Self {
+        self.mobile_perf = Some(mobile_perf);
         self
     }
 
@@ -946,129 +1155,279 @@ impl GrimliteUi {
     fn show_options_window(&mut self, ctx: &Context) {
         let mut open = self.show_options;
         let mut changed = false;
+        let has_mobile_perf = self.mobile_perf.is_some();
+        let default_size = if has_mobile_perf {
+            [335.0, 445.0]
+        } else {
+            [315.0, 325.0]
+        };
         show_detached_window_sized(
             ctx,
             "grimlite_options",
             "Game Options",
-            [315.0, 325.0],
+            default_size,
             Some([295.0, 305.0]),
             &mut open,
             |ui| {
-                ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
-                ui.spacing_mut().button_padding = egui::vec2(5.0, 2.0);
-                ui.spacing_mut().interact_size.y = 20.0;
+                ScrollArea::vertical()
+                    .id_salt("grimlite_options_scroll")
+                    .auto_shrink([false, true])
+                    .show(ui, |ui| {
+                        ui.spacing_mut().item_spacing = egui::vec2(6.0, 4.0);
+                        ui.spacing_mut().button_padding = egui::vec2(5.0, 2.0);
+                        ui.spacing_mut().interact_size.y = 20.0;
 
-                theme::card(ui, "Gameplay", |ui| {
-                    ui.columns(2, |cols| {
-                        cols[0].spacing_mut().item_spacing.y = 4.0;
-                        cols[1].spacing_mut().item_spacing.y = 4.0;
-                        changed |= cols[0]
-                            .checkbox(&mut self.options.infinite_range, "Infinite Range")
-                            .changed();
-                        changed |= cols[0]
-                            .checkbox(&mut self.options.enemy_magnet, "Enemy Magnet")
-                            .changed();
-                        changed |= cols[0]
-                            .checkbox(&mut self.options.skip_cutscenes, "Skip Cutscenes")
-                            .changed();
-                        changed |= cols[0]
-                            .checkbox(&mut self.options.anti_counter, "Anti Counter")
-                            .changed();
+                        theme::card(ui, "Gameplay", |ui| {
+                            ui.columns(2, |cols| {
+                                cols[0].spacing_mut().item_spacing.y = 4.0;
+                                cols[1].spacing_mut().item_spacing.y = 4.0;
+                                changed |= cols[0]
+                                    .checkbox(&mut self.options.infinite_range, "Infinite Range")
+                                    .changed();
+                                changed |= cols[0]
+                                    .checkbox(&mut self.options.enemy_magnet, "Enemy Magnet")
+                                    .changed();
+                                changed |= cols[0]
+                                    .checkbox(&mut self.options.skip_cutscenes, "Skip Cutscenes")
+                                    .changed();
+                                changed |= cols[0]
+                                    .checkbox(&mut self.options.anti_counter, "Anti Counter")
+                                    .changed();
 
-                        changed |= cols[1]
-                            .checkbox(&mut self.options.provoke_monsters, "Provoke Monsters")
-                            .changed();
-                        changed |= cols[1]
-                            .checkbox(&mut self.options.lag_killer, "Lag Killer")
-                            .changed();
-                        changed |= cols[1]
-                            .checkbox(&mut self.options.hide_players, "Hide Players")
-                            .changed();
-                        changed |= cols[1]
-                            .checkbox(&mut self.options.disable_animations, "Disable FX / Anims")
-                            .changed();
-                    });
-                });
+                                changed |= cols[1]
+                                    .checkbox(&mut self.options.provoke_monsters, "Provoke Monsters")
+                                    .changed();
+                                changed |= cols[1]
+                                    .checkbox(&mut self.options.lag_killer, "Lag Killer")
+                                    .changed();
+                                changed |= cols[1]
+                                    .checkbox(&mut self.options.hide_players, "Hide Players")
+                                    .changed();
+                                changed |= cols[1]
+                                    .checkbox(&mut self.options.disable_animations, "Disable FX / Anims")
+                                    .changed();
+                            });
+                        });
 
-                ui.add_space(5.0);
+                        ui.add_space(5.0);
 
-                theme::card(ui, "Speed & FPS", |ui| {
-                    egui::Grid::new("game_opts_sliders_grid")
-                        .num_columns(2)
-                        .spacing([8.0, 4.0])
-                        .show(ui, |ui| {
-                            ui.label("Walk Speed");
-                            ui.horizontal(|ui| {
-                                if ui
-                                    .add(Slider::new(&mut self.options.walk_speed, 4..=40))
-                                    .changed()
-                                {
-                                    self.options.walk_speed_enabled = self.options.walk_speed != 8;
-                                    changed = true;
+                        theme::card(ui, "Speed & FPS", |ui| {
+                            egui::Grid::new("game_opts_sliders_grid")
+                                .num_columns(2)
+                                .spacing([8.0, 4.0])
+                                .show(ui, |ui| {
+                                    ui.label("Walk Speed");
+                                    ui.horizontal(|ui| {
+                                        if ui
+                                            .add(Slider::new(&mut self.options.walk_speed, 4..=40))
+                                            .changed()
+                                        {
+                                            self.options.walk_speed_enabled =
+                                                self.options.walk_speed != 8;
+                                            changed = true;
+                                        }
+                                    });
+                                    ui.end_row();
+
+                                    ui.label("Stage FPS");
+                                    changed |= ui
+                                        .add(Slider::new(&mut self.options.fps, 10..=60))
+                                        .changed();
+                                    ui.end_row();
+                                });
+                        });
+
+                        if let Some(perf) = self.mobile_perf.clone() {
+                            ui.add_space(5.0);
+                            theme::card(ui, "Graphics & Memory (Android)", |ui| {
+                                let saved_api = perf.graphics_api();
+                                let active_backend = perf.active_backend();
+                                ui.horizontal(|ui| {
+                                    ui.label("Graphics API");
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .selectable_label(
+                                                    saved_api == MobileGraphicsApi::Gl,
+                                                    "OpenGL ES",
+                                                )
+                                                .clicked()
+                                            {
+                                                perf.set_graphics_api(MobileGraphicsApi::Gl);
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    saved_api == MobileGraphicsApi::Vulkan,
+                                                    "Vulkan",
+                                                )
+                                                .clicked()
+                                            {
+                                                perf.set_graphics_api(MobileGraphicsApi::Vulkan);
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    saved_api == MobileGraphicsApi::Auto,
+                                                    "Auto",
+                                                )
+                                                .clicked()
+                                            {
+                                                perf.set_graphics_api(MobileGraphicsApi::Auto);
+                                            }
+                                        },
+                                    );
+                                });
+                                let needs_restart = match saved_api {
+                                    MobileGraphicsApi::Vulkan => active_backend != "vulkan",
+                                    MobileGraphicsApi::Gl => active_backend != "gl",
+                                    MobileGraphicsApi::Auto => false,
+                                };
+                                let backend_note = if active_backend.is_empty() {
+                                    "Restart app to apply Graphics API".to_string()
+                                } else if needs_restart {
+                                    format!("Active: {active_backend} · restart app to apply")
+                                } else {
+                                    format!("Active: {active_backend}")
+                                };
+                                ui.label(
+                                    RichText::new(backend_note)
+                                        .small()
+                                        .color(if needs_restart {
+                                            theme::Palette::WARNING
+                                        } else {
+                                            theme::Palette::TEXT_MUTED
+                                        }),
+                                );
+
+                                ui.add_space(3.0);
+                                let preset = perf.render_preset();
+                                ui.horizontal(|ui| {
+                                    ui.label("Render Scale");
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui
+                                                .selectable_label(
+                                                    preset == MobileRenderPreset::Fast540p,
+                                                    "540p",
+                                                )
+                                                .clicked()
+                                            {
+                                                perf.set_render_preset(
+                                                    MobileRenderPreset::Fast540p,
+                                                );
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    preset == MobileRenderPreset::Balanced660p,
+                                                    "660p",
+                                                )
+                                                .clicked()
+                                            {
+                                                perf.set_render_preset(
+                                                    MobileRenderPreset::Balanced660p,
+                                                );
+                                            }
+                                            if ui
+                                                .selectable_label(
+                                                    preset == MobileRenderPreset::Native,
+                                                    "Native",
+                                                )
+                                                .clicked()
+                                            {
+                                                perf.set_render_preset(MobileRenderPreset::Native);
+                                            }
+                                        },
+                                    );
+                                });
+
+                                ui.add_space(3.0);
+                                let mut show_fps = perf.show_fps();
+                                ui.horizontal(|ui| {
+                                    if ui.checkbox(&mut show_fps, "Show Rendered FPS").changed() {
+                                        perf.set_show_fps(show_fps);
+                                    }
+                                    ui.with_layout(
+                                        egui::Layout::right_to_left(egui::Align::Center),
+                                        |ui| {
+                                            if ui.button("Free Memory Now").clicked() {
+                                                perf.trigger_free_memory();
+                                            }
+                                        },
+                                    );
+                                });
+                                let free_status = perf.free_status();
+                                if !free_status.is_empty() {
+                                    ui.label(
+                                        RichText::new(free_status)
+                                            .small()
+                                            .color(theme::Palette::SUCCESS),
+                                    );
                                 }
                             });
-                            ui.end_row();
+                        }
 
-                            ui.label("Stage FPS");
-                            changed |= ui
-                                .add(Slider::new(&mut self.options.fps, 10..=60))
-                                .changed();
-                            ui.end_row();
-                        });
-                });
+                        ui.add_space(5.0);
 
-                ui.add_space(5.0);
-
-                theme::card(ui, "Lag Killer Wallpaper", |ui| {
-                    let has_wp = self.options.lag_killer_image.is_some();
-                    let display = if has_wp {
-                        "Cached (960×550)"
-                    } else {
-                        "None (Black)"
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            RichText::new(display)
-                                .small()
-                                .color(if has_wp {
-                                    theme::Palette::SUCCESS
-                                } else {
-                                    theme::Palette::TEXT_MUTED
-                                }),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if has_wp && ui.button("Clear").clicked() {
-                                grimlite_bot::options::clear_lag_killer_wallpaper_cache();
-                                self.options.lag_killer_image = None;
-                                changed = true;
-                            }
-                            if ui
-                                .button("Choose...")
-                                .on_hover_text(
-                                    "Pick PNG/JPG — auto-cropped to 960×550 and saved to cache",
-                                )
-                                .clicked()
-                                && let Some(ref picker) = self.pick_image
-                                && let Some(path) = picker()
-                            {
-                                match grimlite_bot::options::prepare_lag_killer_wallpaper(&path) {
-                                    Ok(cached) => {
-                                        self.options.lag_killer_image =
-                                            Some(cached.to_string_lossy().to_string());
-                                        self.options.lag_killer_image_rev =
-                                            self.options.lag_killer_image_rev.wrapping_add(1);
-                                        changed = true;
-                                    }
-                                    Err(e) => {
-                                        self.bot
-                                            .logs
-                                            .push_debug(format!("[LagKiller] {e}"));
-                                    }
-                                }
-                            }
+                        theme::card(ui, "Lag Killer Wallpaper", |ui| {
+                            let has_wp = self.options.lag_killer_image.is_some();
+                            let display = if has_wp {
+                                "Cached (960×550)"
+                            } else {
+                                "None (Black)"
+                            };
+                            ui.horizontal(|ui| {
+                                ui.label(
+                                    RichText::new(display)
+                                        .small()
+                                        .color(if has_wp {
+                                            theme::Palette::SUCCESS
+                                        } else {
+                                            theme::Palette::TEXT_MUTED
+                                        }),
+                                );
+                                ui.with_layout(
+                                    egui::Layout::right_to_left(egui::Align::Center),
+                                    |ui| {
+                                        if has_wp && ui.button("Clear").clicked() {
+                                            grimlite_bot::options::clear_lag_killer_wallpaper_cache();
+                                            self.options.lag_killer_image = None;
+                                            changed = true;
+                                        }
+                                        if ui
+                                            .button("Choose...")
+                                            .on_hover_text(
+                                                "Pick PNG/JPG — auto-cropped to 960×550 and saved to cache",
+                                            )
+                                            .clicked()
+                                            && let Some(ref picker) = self.pick_image
+                                            && let Some(path) = picker()
+                                        {
+                                            match grimlite_bot::options::prepare_lag_killer_wallpaper(
+                                                &path,
+                                            ) {
+                                                Ok(cached) => {
+                                                    self.options.lag_killer_image = Some(
+                                                        cached.to_string_lossy().to_string(),
+                                                    );
+                                                    self.options.lag_killer_image_rev = self
+                                                        .options
+                                                        .lag_killer_image_rev
+                                                        .wrapping_add(1);
+                                                    changed = true;
+                                                }
+                                                Err(e) => {
+                                                    self.bot
+                                                        .logs
+                                                        .push_debug(format!("[LagKiller] {e}"));
+                                                }
+                                            }
+                                        }
+                                    },
+                                );
+                            });
                         });
                     });
-                });
             },
         );
         if changed {

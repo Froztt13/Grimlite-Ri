@@ -14,7 +14,7 @@ const MAIN_CLASS: &str = "grimlite.host.Main";
 const SWF_VERSION: u8 = 43;
 const WIDTH: f64 = 958.0;
 const HEIGHT: f64 = 550.0;
-const FRAME_RATE: u8 = 24;
+const FRAME_RATE: u8 = 30;
 
 fn main() -> anyhow::Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));

@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.GameManager
 import android.content.ActivityNotFoundException
+import android.content.ComponentCallbacks2
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -13,6 +14,7 @@ import android.os.PowerManager
 import android.provider.OpenableColumns
 import android.provider.Settings
 import android.util.Log
+import android.view.MotionEvent
 import android.view.WindowManager
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,6 +34,26 @@ class MainActivity : GameActivity() {
 
     @Volatile
     private var pendingSaveContent: String = ""
+
+    /** Native Android EditText bar docked directly above the soft keyboard for Flash fields. */
+    private val gameField by lazy {
+        NativeTextFieldBar(
+            this,
+            object : NativeTextFieldBar.FieldTarget {
+                override fun edited(text: String, start: Int, end: Int) {
+                    nativeOnGameFieldEdited(text, start, end)
+                }
+
+                override fun enter() {
+                    nativeOnGameFieldEnter()
+                }
+
+                override fun closed() {
+                    nativeOnGameFieldClosed()
+                }
+            },
+        )
+    }
 
     private val openDocumentLauncher =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -116,11 +138,55 @@ class MainActivity : GameActivity() {
         super.onDestroy()
     }
 
+    override fun onTrimMemory(level: Int) {
+        super.onTrimMemory(level)
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            Log.i(TAG, "MainActivity.onTrimMemory(level=$level) -> trimming GPU/shape caches")
+            nativeTrimMemory(level)
+        }
+    }
+
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) {
             hideSystemBars()
         }
+    }
+
+    override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+        if (event.actionMasked == MotionEvent.ACTION_DOWN &&
+            gameField.shown &&
+            gameField.touchedOutside(event.rawX, event.rawY)
+        ) {
+            gameField.close()
+        }
+        return super.dispatchTouchEvent(event)
+    }
+
+    /** Called from Rust (`Grimlite Engine`) when a Flash text field gains focus. */
+    fun showGameField(text: String, start: Int, end: Int, password: Boolean, maxChars: Int) {
+        runOnUiThread {
+            gameField.show(text, start, end, password, maxChars, "Type in the game")
+        }
+    }
+
+    /** Called from Rust (`Grimlite Engine`) when the focused Flash text field's contents change. */
+    fun updateGameField(text: String, start: Int, end: Int) {
+        runOnUiThread {
+            gameField.update(text, start, end)
+        }
+    }
+
+    /** Called from Rust (`Grimlite Engine`) when the Flash text field loses focus. */
+    fun hideGameField() {
+        runOnUiThread {
+            gameField.hide(false)
+        }
+    }
+
+    /** Restores focus to GameActivity's SurfaceView after the native text field closes. */
+    fun focusSurface() {
+        mSurfaceView?.requestFocus()
     }
 
     override fun onRequestPermissionsResult(
@@ -308,5 +374,17 @@ class MainActivity : GameActivity() {
 
         @JvmStatic
         external fun nativeStopAllBots()
+
+        @JvmStatic
+        external fun nativeTrimMemory(level: Int)
+
+        @JvmStatic
+        external fun nativeOnGameFieldEdited(text: String, start: Int, end: Int)
+
+        @JvmStatic
+        external fun nativeOnGameFieldEnter()
+
+        @JvmStatic
+        external fun nativeOnGameFieldClosed()
     }
 }
