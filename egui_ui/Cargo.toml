@@ -13,3 +13,4 @@ grimlite_bot = { path = "../bot" }
 egui = { workspace = true }
 image = { workspace = true, features = ["png", "jpeg", "webp", "bmp", "gif"] }
 serde_json = { workspace = true }
+sha2 = { workspace = true }

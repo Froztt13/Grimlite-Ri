@@ -1,5 +1,6 @@
-//! Grimlite Ri Tools modules: Fast Travel, Loaders, Hotkeys, Cosmetics, and Packets.
+//! Grimlite Ri Tools modules: Accounts, Fast Travel, Loaders, Hotkeys, Cosmetics, and Packets.
 
+pub mod accounts;
 pub mod cosmetics;
 pub mod hotkeys;
 pub mod loaders;
@@ -8,6 +9,7 @@ pub mod travels;
 
 use crate::bot_managers::FileDialogFn;
 use crate::maid::MaidWindow;
+use crate::tools::accounts::AccountsWindow;
 use crate::tools::cosmetics::CosmeticsWindow;
 use crate::tools::hotkeys::{HotkeyEffects, HotkeysWindow};
 use crate::tools::loaders::LoadersWindow;
@@ -18,6 +20,7 @@ use grimlite_bot::Bot;
 use std::sync::Arc;
 
 pub struct ToolsWindows {
+    pub accounts: AccountsWindow,
     pub maid: MaidWindow,
     pub travels: TravelsWindow,
     pub loaders: LoadersWindow,
@@ -29,6 +32,7 @@ pub struct ToolsWindows {
 impl ToolsWindows {
     pub fn new(bot: Arc<Bot>) -> Self {
         Self {
+            accounts: AccountsWindow::new(bot.clone()),
             maid: MaidWindow::new(bot.clone(), None, None),
             travels: TravelsWindow::new(bot.clone()),
             loaders: LoadersWindow::new(bot.clone()),
@@ -48,7 +52,8 @@ impl ToolsWindows {
 
     /// Whether any tool window is currently open.
     pub fn has_open_window(&self) -> bool {
-        self.maid.open
+        self.accounts.open
+            || self.maid.open
             || self.travels.open
             || self.loaders.open
             || self.hotkeys.open
@@ -85,7 +90,10 @@ impl ToolsWindows {
             self.cosmetics.open = !self.cosmetics.open;
             ui.close();
         }
-        ui.separator();
+    }
+
+    /// Renders the `Packets` dropdown menu items in the top navigation bar.
+    pub fn packets_menu_items(&mut self, ui: &mut Ui) {
         self.packets.menu_items(ui);
     }
 
@@ -114,6 +122,7 @@ impl ToolsWindows {
             self.cosmetics.open = !self.cosmetics.open;
         }
 
+        self.accounts.show(ctx);
         self.maid.show(ctx);
         self.travels.show(ctx);
         self.loaders.show(ctx);

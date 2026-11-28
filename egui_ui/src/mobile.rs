@@ -33,6 +33,7 @@ pub enum MobileFlyout {
     Accounts,
     QuickActions,
     Tools,
+    Packets,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +44,7 @@ enum MobileIcon {
     Quick,
     Swords,
     Tools,
+    Packets,
     Sliders,
     Terminal,
     CollapseLeft,
@@ -73,6 +75,9 @@ impl GrimliteUi {
 
         // Keep cell list synced whenever the player enters a new map even while popovers are closed.
         let snap = self.bot.player_snapshot();
+        if snap.logged_in && self.tools.accounts.open {
+            self.tools.accounts.open = false;
+        }
         if snap.logged_in && !snap.map.is_empty() && snap.map != self.last_map_name {
             self.last_map_name = snap.map.clone();
             if !snap.cell.is_empty() {
@@ -171,7 +176,7 @@ impl GrimliteUi {
             )
             .show(egui_ui, |ui| {
                 let avail_h = ui.available_height();
-                if avail_h >= 362.0 {
+                if avail_h >= 400.0 {
                     ui.vertical_centered(|ui| {
                         self.draw_rail_top_items(ui, tabs, snap);
                     });
@@ -220,7 +225,8 @@ impl GrimliteUi {
             || self.tools.travels.open
             || self.tools.loaders.open
             || self.tools.hotkeys.open
-            || self.tools.cosmetics.open
+            || self.tools.cosmetics.open;
+        let packets_open = self.mobile_flyout == Some(MobileFlyout::Packets)
             || self.tools.packets.show_logger
             || self.tools.packets.show_spammer
             || self.tools.packets.show_tamperer;
@@ -240,7 +246,8 @@ impl GrimliteUi {
             ui,
             MobileIcon::Accounts,
             ButtonTone::Standard {
-                open: self.mobile_flyout == Some(MobileFlyout::Accounts),
+                open: self.mobile_flyout == Some(MobileFlyout::Accounts)
+                    || self.tools.accounts.open,
             },
             acc_dot,
             badge,
@@ -251,41 +258,7 @@ impl GrimliteUi {
             self.toggle_flyout(MobileFlyout::Accounts);
         }
 
-        // 2. Bot Manager
-        if rail_icon_button(
-            ui,
-            MobileIcon::Bot,
-            ButtonTone::Standard {
-                open: self.show_bot_manager,
-            },
-            bot_running.then_some(Palette::SUCCESS),
-            None,
-            "Bot Manager",
-        )
-        .clicked()
-        {
-            self.mobile_flyout = None;
-            self.show_bot_manager = !self.show_bot_manager;
-        }
-
-        // 3. Maid Remake
-        if rail_icon_button(
-            ui,
-            MobileIcon::Maid,
-            ButtonTone::Standard {
-                open: self.tools.maid.open,
-            },
-            maid_running.then_some(Palette::SUCCESS),
-            None,
-            "Maid Remake",
-        )
-        .clicked()
-        {
-            self.mobile_flyout = None;
-            self.tools.maid.open = !self.tools.maid.open;
-        }
-
-        // 4. Quick Controls (Start/Stop Bot & Maid, Cell/Pad Jump, Bank)
+        // 2. Quick Controls (Start/Stop Bot & Maid, Cell/Pad Jump, Bank)
         let quick_dot = (bot_running || maid_running || aa_running).then_some(Palette::SUCCESS);
         if rail_icon_button(
             ui,
@@ -302,7 +275,7 @@ impl GrimliteUi {
             self.toggle_flyout(MobileFlyout::QuickActions);
         }
 
-        // 5. 1-Tap Auto Attack Toggle
+        // 3. 1-Tap Auto Attack Toggle
         if rail_icon_button(
             ui,
             MobileIcon::Swords,
@@ -322,18 +295,51 @@ impl GrimliteUi {
 
         rail_divider(ui);
 
-        // 6. Tools Menu (Fast Travel, Loaders, Hotkeys, Cosmetics, Packets)
+        // Main menu order (mirrors desktop navbar): Bot, Tools, Packets, Options, Logs, Maid
+
+        // 4. Bot Manager
+        if rail_icon_button(
+            ui,
+            MobileIcon::Bot,
+            ButtonTone::Standard {
+                open: self.show_bot_manager,
+            },
+            bot_running.then_some(Palette::SUCCESS),
+            None,
+            "Bot Manager",
+        )
+        .clicked()
+        {
+            self.mobile_flyout = None;
+            self.show_bot_manager = !self.show_bot_manager;
+        }
+
+        // 5. Tools Menu (Fast Travel, Loaders, Hotkeys, Cosmetics)
         if rail_icon_button(
             ui,
             MobileIcon::Tools,
             ButtonTone::Standard { open: tools_open },
             None,
             None,
-            "Tools & Packets",
+            "Tools",
         )
         .clicked()
         {
             self.toggle_flyout(MobileFlyout::Tools);
+        }
+
+        // 6. Packets Menu (Packet Logger, Spammer & Sender, Tamperer)
+        if rail_icon_button(
+            ui,
+            MobileIcon::Packets,
+            ButtonTone::Standard { open: packets_open },
+            None,
+            None,
+            "Packets",
+        )
+        .clicked()
+        {
+            self.toggle_flyout(MobileFlyout::Packets);
         }
 
         // 7. Game Options (FPS, Walk Speed, Lag Killer, Hide Players, Disable FX)
@@ -368,6 +374,23 @@ impl GrimliteUi {
         {
             self.mobile_flyout = None;
             self.show_logs = !self.show_logs;
+        }
+
+        // 9. Maid Remake
+        if rail_icon_button(
+            ui,
+            MobileIcon::Maid,
+            ButtonTone::Standard {
+                open: self.tools.maid.open,
+            },
+            maid_running.then_some(Palette::SUCCESS),
+            None,
+            "Maid Remake",
+        )
+        .clicked()
+        {
+            self.mobile_flyout = None;
+            self.tools.maid.open = !self.tools.maid.open;
         }
     }
 
@@ -410,8 +433,9 @@ impl GrimliteUi {
         let mut tab_action = TabBarAction::None;
         let anchor_y: f32 = match flyout {
             MobileFlyout::Accounts => 8.0,
-            MobileFlyout::QuickActions => 76.0,
-            MobileFlyout::Tools => 144.0,
+            MobileFlyout::QuickActions => 44.0,
+            MobileFlyout::Tools => 152.0,
+            MobileFlyout::Packets => 186.0,
         };
         let screen = ctx.content_rect();
         let max_y = (screen.bottom() - 220.0).max(8.0);
@@ -421,6 +445,7 @@ impl GrimliteUi {
             MobileFlyout::Accounts => "grimlite_flyout_accounts",
             MobileFlyout::QuickActions => "grimlite_flyout_quick",
             MobileFlyout::Tools => "grimlite_flyout_tools",
+            MobileFlyout::Packets => "grimlite_flyout_packets",
         };
 
         let frame = Frame::new()
@@ -582,6 +607,15 @@ impl GrimliteUi {
                         });
 
                     ui.add_space(6.0);
+                    if !snap.logged_in {
+                        if flyout_menu_row(ui, "Account Manager", self.tools.accounts.open)
+                            .clicked()
+                        {
+                            self.tools.accounts.open = !self.tools.accounts.open;
+                            close_flyout = true;
+                        }
+                        ui.add_space(4.0);
+                    }
                     if theme::primary_button(ui, "+ New Account Tab", [214.0, 28.0]).clicked() {
                         tab_action = TabBarAction::NewTab;
                         close_flyout = true;
@@ -797,7 +831,7 @@ impl GrimliteUi {
                 MobileFlyout::Tools => {
                     ui.set_width(196.0);
                     ui.label(
-                        RichText::new("Tools & Packets")
+                        RichText::new("Tools")
                             .size(12.5)
                             .strong()
                             .color(Color32::WHITE),
@@ -821,7 +855,19 @@ impl GrimliteUi {
                         self.tools.cosmetics.open = !self.tools.cosmetics.open;
                         close_flyout = true;
                     }
-                    ui.separator();
+                }
+
+                MobileFlyout::Packets => {
+                    ui.set_width(210.0);
+                    ui.label(
+                        RichText::new("Packets")
+                            .size(12.5)
+                            .strong()
+                            .color(Color32::WHITE),
+                    );
+                    ui.add_space(4.0);
+                    ui.spacing_mut().item_spacing.y = 3.0;
+
                     if flyout_menu_row(ui, "Packet Logger", self.tools.packets.show_logger)
                         .clicked()
                     {
@@ -838,8 +884,12 @@ impl GrimliteUi {
                         self.tools.packets.show_spammer = !self.tools.packets.show_spammer;
                         close_flyout = true;
                     }
-                    if flyout_menu_row(ui, "Packet Tamperer", self.tools.packets.show_tamperer)
-                        .clicked()
+                    if flyout_menu_row(
+                        ui,
+                        "Packet Tamperer / Interceptor",
+                        self.tools.packets.show_tamperer,
+                    )
+                    .clicked()
                     {
                         self.tools.packets.show_tamperer = !self.tools.packets.show_tamperer;
                         close_flyout = true;
@@ -1200,6 +1250,30 @@ fn paint_mobile_icon(painter: &egui::Painter, icon: MobileIcon, c: Pos2, color: 
                 let box_rect = Rect::from_center_size(pos2(c.x + dx, c.y + dy), vec2(4.8, 4.8));
                 painter.rect_stroke(box_rect, r, s, StrokeKind::Inside);
             }
+        }
+
+        MobileIcon::Packets => {
+            // Bidirectional network packet arrows (`arrow-left-right`)
+            // Top arrow pointing right (->)
+            painter.line_segment([pos2(c.x - 5.6, c.y - 2.8), pos2(c.x + 5.2, c.y - 2.8)], s);
+            painter.add(Shape::line(
+                vec![
+                    pos2(c.x + 2.4, c.y - 5.6),
+                    pos2(c.x + 5.4, c.y - 2.8),
+                    pos2(c.x + 2.4, c.y),
+                ],
+                s,
+            ));
+            // Bottom arrow pointing left (<-)
+            painter.line_segment([pos2(c.x + 5.6, c.y + 2.8), pos2(c.x - 5.2, c.y + 2.8)], s);
+            painter.add(Shape::line(
+                vec![
+                    pos2(c.x - 2.4, c.y),
+                    pos2(c.x - 5.4, c.y + 2.8),
+                    pos2(c.x - 2.4, c.y + 5.6),
+                ],
+                s,
+            ));
         }
 
         MobileIcon::Sliders => {

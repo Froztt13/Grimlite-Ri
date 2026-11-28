@@ -509,7 +509,7 @@ impl GrimliteUi {
         self.tools.maid.notify_json_saved(name);
     }
 
-    /// Whether a mobile left-rail flyout (`Accounts`, `Quick Controls`, or `Tools`) is currently open.
+    /// Whether a mobile left-rail flyout (`Accounts`, `Quick Controls`, `Tools`, or `Packets`) is currently open.
     pub fn has_active_flyout(&self) -> bool {
         self.mobile_flyout.is_some()
     }
@@ -538,6 +538,10 @@ impl GrimliteUi {
             theme::apply(ctx);
             self.theme_applied = true;
         }
+        let snap = self.bot.player_snapshot();
+        if snap.logged_in && self.tools.accounts.open {
+            self.tools.accounts.open = false;
+        }
         Panel::top("grimlite_nav_bar")
             .exact_size(NAV_BAR_HEIGHT)
             .show(egui_ui, |ui| {
@@ -558,14 +562,22 @@ impl GrimliteUi {
                     }
                     ui.separator();
 
+                    if !snap.logged_in {
+                        if ui
+                            .selectable_label(self.tools.accounts.open, "Accounts")
+                            .on_hover_text("Open Account Manager (quick fill / direct login)")
+                            .clicked()
+                        {
+                            self.tools.accounts.open = !self.tools.accounts.open;
+                        }
+                        ui.separator();
+                    }
+
                     if ui
                         .selectable_label(self.show_bot_manager, "Bot")
                         .clicked()
                     {
                         self.show_bot_manager = !self.show_bot_manager;
-                    }
-                    if ui.selectable_label(self.show_options, "Options").clicked() {
-                        self.show_options = !self.show_options;
                     }
 
                     ui.scope(|ui| {
@@ -576,8 +588,14 @@ impl GrimliteUi {
                         ui.menu_button("Tools", |ui| {
                             self.tools.menu_items(ui);
                         });
+                        ui.menu_button("Packets", |ui| {
+                            self.tools.packets_menu_items(ui);
+                        });
                     });
 
+                    if ui.selectable_label(self.show_options, "Options").clicked() {
+                        self.show_options = !self.show_options;
+                    }
                     if ui.selectable_label(self.show_logs, "Logs").clicked() {
                         self.show_logs = !self.show_logs;
                     }
