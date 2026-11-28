@@ -1572,11 +1572,11 @@ pub fn spawn_update_check(
             // `RUFFLE_TEST_UPDATE_FROM=0.9` pretends to be that version (testing).
             let current = std::env::var("RUFFLE_TEST_UPDATE_FROM").unwrap_or(VERSION.to_string());
             if Some(latest_number) <= parse_version(&current) {
-                tracing::info!("Mugetsu {current} is up to date (latest release: {latest})");
+                tracing::info!("Grimlite Ri {current} is up to date (latest release: {latest})");
                 return;
             }
             let latest = latest.trim_start_matches('v').to_string();
-            tracing::info!("Mugetsu {latest} is available");
+            tracing::info!("Grimlite Ri {latest} is available");
             add_title_note(format!("update {latest} available"));
             window.set_title(&window_title());
 
@@ -1637,7 +1637,7 @@ pub fn set_update_reminders(on: bool) {
 fn latest_release() -> Result<String, Box<dyn std::error::Error>> {
     let client = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(15))
-        .user_agent(format!("Mugetsu/{VERSION}"))
+        .user_agent(format!("GrimliteRi/{VERSION}"))
         .build()?;
     let body = client
         .get(RELEASES_API)

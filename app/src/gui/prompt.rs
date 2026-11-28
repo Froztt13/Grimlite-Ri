@@ -55,8 +55,8 @@ impl Prompt {
     pub fn graphics(choice: Option<Graphics>) -> Self {
         let name = choice.map_or("automatic", Graphics::name);
         Self {
-            title: "Restart Mugetsu?".to_string(),
-            body: format!("Mugetsu will restart to use {name} graphics."),
+            title: "Restart Grimlite Ri?".to_string(),
+            body: format!("Grimlite Ri will restart to use {name} graphics."),
             hint: Some(if cfg!(windows) {
                 "You can switch again any time: right-click the game or the title bar."
             } else {
@@ -77,9 +77,9 @@ impl Prompt {
     /// It needs one of its buttons (Enter may be meant for the chat, and would restart).
     pub fn interpolation_restart() -> Self {
         Self {
-            title: "Restart Mugetsu for full speed?".to_string(),
+            title: "Restart Grimlite Ri for full speed?".to_string(),
             body: "Frame interpolation is on. In crowded rooms it gets much smoother after a \
-                   restart: Mugetsu then does its drawing on a second processor thread."
+                   restart: Grimlite Ri then does its drawing on a second processor thread."
                 .to_string(),
             hint: Some(
                 "It works without a restart too, only slower. Restarting means logging in \
@@ -102,7 +102,7 @@ impl Prompt {
             // Closing it (or "Remind me later") asks again at the next start, as does
             // "Download" while this version is still the one running.
             Notice::UpdateAvailable { latest, current } => Self {
-                title: format!("Mugetsu {latest} is available"),
+                title: format!("Grimlite Ri {latest} is available"),
                 body: format!("You have {current}. Open the download page?"),
                 hint: None,
                 buttons: vec![
@@ -116,20 +116,20 @@ impl Prompt {
                 asked: false,
             },
             Notice::BuiltInGraphics { chosen, dedicated } => Self {
-                title: "Mugetsu is on your built-in graphics".to_string(),
+                title: "Grimlite Ri is on your built-in graphics".to_string(),
                 body: if cfg!(windows) {
                     format!(
                         "It's running on {chosen} instead of your {dedicated}, which is much \
-                        faster. To switch: in Windows' graphics settings, add Mugetsu.exe \
+                        faster. To switch: in Windows' graphics settings, add grimlite-ri.exe \
                         (Browse), click it > Options > High performance > Save. On NVIDIA \
                         laptops also check NVIDIA Control Panel > Manage 3D settings > Program \
-                        settings. Then restart Mugetsu."
+                        settings. Then restart Grimlite Ri."
                     )
                 } else {
                     format!(
                         "It's running on {chosen} instead of your {dedicated}, which is much \
-                        faster. Set Mugetsu to use the dedicated graphics card in your system's \
-                        per-app graphics setting, then restart Mugetsu."
+                        faster. Set Grimlite Ri to use the dedicated graphics card in your system's \
+                        per-app graphics setting, then restart Grimlite Ri."
                     )
                 },
                 hint: Some("This is only shown once."),
@@ -152,7 +152,7 @@ impl Prompt {
                     change Quality to Low: edges are a little less smooth, but built-in \
                     graphics usually run AQW several times faster."
                 ),
-                hint: Some("Mugetsu won't show this again."),
+                hint: Some("Grimlite Ri won't show this again."),
                 buttons: vec![("OK", None)],
                 links: Vec::new(),
                 asked: false,
@@ -165,7 +165,7 @@ impl Prompt {
                     the window: the picture gets a little softer, and the game runs faster."
                 ),
                 hint: Some(
-                    "You can change it any time in the right-click menu. Mugetsu won't ask again.",
+                    "You can change it any time in the right-click menu. Grimlite Ri won't ask again.",
                 ),
                 buttons: vec![
                     ("Turn on", Some(Action::TurnOnPerformance(level))),

@@ -271,7 +271,7 @@ impl UiBackend for DesktopUiBackend {
             .event_loop
             .send_event(RuffleEvent::OpenDialog(DialogDescriptor::ShowMessage(
                 MessageDialogConfiguration::new(
-                    LocalizableText::NonLocalizedText("Mugetsu".into()), // AQW build: window title
+                    LocalizableText::NonLocalizedText("Grimlite Ri".into()),
                     LocalizableText::NonLocalizedText(message.to_string().into()),
                 ),
             )));

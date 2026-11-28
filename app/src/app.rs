@@ -1331,7 +1331,7 @@ impl MainWindow {
                 #[cfg(any(windows, target_os = "linux"))]
                 mugetsu::save_graphics(choice);
                 tracing::info!(
-                    "Graphics changed to {}; starting Mugetsu again",
+                    "Graphics changed to {}; starting Grimlite Ri again",
                     choice.map_or("Automatic", mugetsu::Graphics::name)
                 );
                 // Closed like any other time (the player and renderer let go of while the
@@ -1340,7 +1340,7 @@ impl MainWindow {
                 let _ = self.event_loop_proxy.send_event(RuffleEvent::ExitRequested);
             }
             Setting::Restart => {
-                tracing::info!("Starting Mugetsu again (asked for in a prompt)");
+                tracing::info!("Starting Grimlite Ri again (asked for in a prompt)");
                 mugetsu::start_again_after_exit();
                 let _ = self.event_loop_proxy.send_event(RuffleEvent::ExitRequested);
             }

@@ -23,7 +23,7 @@ pub fn contents(ui: &mut Ui, event_loop: &EventLoopProxy<RuffleEvent>) {
     ui.painter().text(
         pos2(rect.left() + 4.0 * z, rect.center().y),
         Align2::LEFT_CENTER,
-        "Mugetsu",
+        "Grimlite Ri",
         FontId::proportional(16.0 * z),
         TEXT,
     );
@@ -51,7 +51,7 @@ pub fn menu_button(ui: &mut Ui, event_loop: &EventLoopProxy<RuffleEvent>) {
     // on any click inside it unless told otherwise). `contents` closes it after a change.
     let config = egui::containers::menu::MenuConfig::new()
         .close_behavior(egui::containers::PopupCloseBehavior::CloseOnClickOutside);
-    egui::containers::menu::MenuButton::new("Mugetsu")
+    egui::containers::menu::MenuButton::new("Grimlite Ri")
         .config(config)
         .ui(ui, |ui| contents(ui, event_loop));
 }

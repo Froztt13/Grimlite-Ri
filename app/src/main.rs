@@ -181,20 +181,20 @@ fn panic_hook(info: &PanicHookInfo) {
     let description = if GPU_RESET_HINTS.iter().any(|hint| message.contains(hint)) {
         "The graphics driver stopped responding or was reset by Windows (for example after a \
         driver update or a driver crash, or because the graphics card ran out of memory), so \
-        Mugetsu has to close.\n\n\
-        Please start Mugetsu again. If this keeps happening in crowded rooms, set Quality to LOW \
+        Grimlite Ri has to close.\n\n\
+        Please start Grimlite Ri again. If this keeps happening in crowded rooms, set Quality to LOW \
         in AQW's options."
             .to_string()
     } else {
         format!(
-            "Mugetsu ran into an error and has to close.\n\n{message}\n\n\
+            "Grimlite Ri ran into an error and has to close.\n\n{message}\n\n\
             Details were saved to %LOCALAPPDATA%\\ruffle\\log\\ruffle.log (it is replaced \
-            the next time Mugetsu starts)."
+            the next time Grimlite Ri starts)."
         )
     };
     rfd::MessageDialog::new()
         .set_level(rfd::MessageLevel::Error)
-        .set_title("Mugetsu")
+        .set_title("Grimlite Ri")
         .set_description(description)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
@@ -441,7 +441,7 @@ fn main() -> Result<(), Error> {
 
     subscriber.init();
 
-    tracing::info!("Mugetsu {} (Ruffle {RUFFLE_VERSION})", mugetsu::VERSION);
+    tracing::info!("Grimlite Ri {} (Ruffle {RUFFLE_VERSION})", mugetsu::VERSION);
     // AQW build: the test switches this run was started with, so a log says which launcher
     // (or comparison) it is from.
     let mut switches: Vec<String> = env::vars_os()

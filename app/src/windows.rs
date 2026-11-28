@@ -303,7 +303,7 @@ impl CrashFile {
         let file = crate::mugetsu::log_folder()
             .and_then(|folder| std::fs::File::create(folder.join("crash.txt")).ok());
         let mut crash_file = Self(file);
-        crash_file.add(&format!("Mugetsu {}\n{record}\n", crate::mugetsu::VERSION));
+        crash_file.add(&format!("Grimlite Ri {}\n{record}\n", crate::mugetsu::VERSION));
         crash_file
     }
 
@@ -431,7 +431,7 @@ fn message_box(text: &str, ok_cancel: bool) -> bool {
         IDOK, MB_ICONERROR, MB_OK, MB_OKCANCEL, MB_SETFOREGROUND, MB_TOPMOST, MessageBoxW,
     };
     let wide = |s: &str| s.encode_utf16().chain(Some(0)).collect::<Vec<u16>>();
-    let (text, title) = (wide(text), wide("Mugetsu"));
+    let (text, title) = (wide(text), wide("Grimlite Ri"));
     let buttons = if ok_cancel { MB_OKCANCEL } else { MB_OK };
     // SAFETY: both strings are NUL-terminated UTF-16 that outlive the call.
     let result = unsafe {

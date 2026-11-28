@@ -155,7 +155,7 @@ impl ContextMenu {
                         ui.painter().text(
                             pos2(rect.left() + 4.0 * z, rect.center().y),
                             Align2::LEFT_CENTER,
-                            "Mugetsu",
+                            "Grimlite Ri",
                             FontId::proportional(16.0 * z),
                             TEXT,
                         );
@@ -289,7 +289,7 @@ pub(crate) fn settings_rows(
         if let Some(choice) = rows.choice(
             ui,
             "Graphics API",
-            "Changing it restarts Mugetsu",
+            "Changing it restarts Grimlite Ri",
             options,
             current,
         ) {
@@ -345,7 +345,7 @@ pub(crate) fn settings_rows(
         3072 => "3 GB".to_owned(),
         mb => format!("{mb} MB"),
     };
-    if rows.value(ui, "Memory limit", "Mugetsu tries to stay under it", &value)
+    if rows.value(ui, "Memory limit", "Grimlite Ri tries to stay under it", &value)
         && let Some((mb, settled)) =
             memory_limit_rows(ui, z, &format!("memory_{id}"), settings.memory_limit_mb)
     {
