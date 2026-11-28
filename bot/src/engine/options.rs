@@ -15,8 +15,8 @@ pub fn set_cache_dir(dir: PathBuf) {
     let _ = CUSTOM_CACHE_DIR.set(dir);
 }
 
-/// Persistent cache path for the cropped & resized Lag Killer wallpaper.
-pub fn lag_killer_cache_path() -> PathBuf {
+/// Persistent app data/cache directory (`Grimlite-Ri`) across Desktop and Android.
+pub fn app_data_dir() -> PathBuf {
     CUSTOM_CACHE_DIR
         .get()
         .cloned()
@@ -24,7 +24,11 @@ pub fn lag_killer_cache_path() -> PathBuf {
         .or_else(dirs::data_dir)
         .unwrap_or_else(|| PathBuf::from("."))
         .join("Grimlite-Ri")
-        .join("lag_killer_wallpaper.jpg")
+}
+
+/// Persistent cache path for the cropped & resized Lag Killer wallpaper.
+pub fn lag_killer_cache_path() -> PathBuf {
+    app_data_dir().join("lag_killer_wallpaper.jpg")
 }
 
 /// Center-crops & resizes `src` to `960×550` (AQW stage aspect ratio) and saves it to the
