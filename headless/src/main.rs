@@ -1,6 +1,8 @@
 //! Grimlite Ri Headless Mode — Tabbed multi-account Ruffle `NullRenderer` (0% GPU, 2 FPS)
 //! with dashboard navigation (Main, Inventory, Quests), item-list logs, and next-packet filtering.
 
+#![windows_subsystem = "windows"]
+
 mod null_engine;
 
 use crate::null_engine::HeadlessEngine;
@@ -170,6 +172,7 @@ struct Session {
     show_bot_manager: bool,
     maid: MaidWindow,
     last_active_cmd_idx: Option<usize>,
+    last_inv_sync: Instant,
     // Next-packet filtered log (already-written packets are never retroactively filtered)
     last_pkt_ver: u64,
     last_pkt_seq: u64,
@@ -179,8 +182,8 @@ struct Session {
 impl Session {
     fn new(user: String, password: String, server: String) -> Self {
         let bot = Bot::new();
-        bot.capture.set_logging_server(true);
-        bot.capture.set_logging_client(true);
+        bot.capture.set_logging_server(false);
+        bot.capture.set_logging_client(false);
         let bot_manager = BotManagerWindow::new(
             bot.clone(),
             Some(Box::new(|| {
@@ -226,6 +229,7 @@ impl Session {
             show_bot_manager: false,
             maid,
             last_active_cmd_idx: None,
+            last_inv_sync: Instant::now() - std::time::Duration::from_secs(10),
             last_pkt_ver: 0,
             last_pkt_seq: 0,
             packet_log: VecDeque::with_capacity(256),
@@ -366,8 +370,8 @@ impl HeadlessApp {
             item_type_filter: ItemTypeFilter::All,
             log_filter: String::new(),
             auto_scroll: true,
-            show_server_packets: true,
-            show_client_packets: true,
+            show_server_packets: false,
+            show_client_packets: false,
             inv_search: String::new(),
             quest_search: String::new(),
             quest_active_only: false,
@@ -616,6 +620,14 @@ impl eframe::App for HeadlessApp {
                     ui.add_space(3.0);
                     nav_button(ui, &mut self.menu, DashboardMenu::Quests, "Quests");
                 });
+
+            if ready
+                && matches!(self.menu, DashboardMenu::Inventory | DashboardMenu::Quests)
+                && sess.last_inv_sync.elapsed() >= std::time::Duration::from_millis(2500)
+            {
+                sess.last_inv_sync = Instant::now();
+                sess.bot.refresh_inventory_from_flash();
+            }
 
             match self.menu {
                 DashboardMenu::Main => {
