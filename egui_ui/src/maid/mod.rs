@@ -1,6 +1,3 @@
-//! Compact, modern Maid Remake tool window (`egui`).
-//! Mirrors all Grimlite-Li Maid Remake features in a clean 3-tab detached window.
-
 use crate::bot_managers::FileDialogFn;
 use crate::show_detached_window_sized;
 use crate::theme;
@@ -84,10 +81,10 @@ impl MaidWindow {
             return;
         }
         let root_wants_kb = ctx.egui_wants_keyboard_input();
-        let pressed_r =
-            (!root_wants_kb && ctx.input(|i| i.key_pressed(Key::R))) || child_keys.contains(&Key::R);
-        let pressed_t =
-            (!root_wants_kb && ctx.input(|i| i.key_pressed(Key::T))) || child_keys.contains(&Key::T);
+        let pressed_r = (!root_wants_kb && ctx.input(|i| i.key_pressed(Key::R)))
+            || child_keys.contains(&Key::R);
+        let pressed_t = (!root_wants_kb && ctx.input(|i| i.key_pressed(Key::T)))
+            || child_keys.contains(&Key::T);
 
         if pressed_r {
             self.bot.maid.toggle_unfollow();
@@ -130,7 +127,7 @@ impl MaidWindow {
         show_detached_window_sized(
             ctx,
             "grimlite_maid",
-            "Maid Remake",
+            "Maid",
             [380.0, 425.0],
             Some([340.0, 280.0]),
             &mut open,
@@ -204,13 +201,11 @@ impl MaidWindow {
                             );
                         }
                         if let Some((ref msg, is_err)) = self.status_msg {
-                            ui.label(
-                                RichText::new(msg).small().color(if is_err {
-                                    Color32::from_rgb(235, 90, 90)
-                                } else {
-                                    Color32::from_rgb(110, 210, 140)
-                                }),
-                            );
+                            ui.label(RichText::new(msg).small().color(if is_err {
+                                Color32::from_rgb(235, 90, 90)
+                            } else {
+                                Color32::from_rgb(110, 210, 140)
+                            }));
                         }
                     });
                 }
@@ -470,7 +465,10 @@ impl MaidWindow {
                 dirty |= ui.checkbox(&mut cfg.special_anims, "Enable").changed();
                 ui.label("Force Skill #");
                 dirty |= ui
-                    .add_sized([48.0, 20.0], egui::DragValue::new(&mut cfg.special_act).range(0..=5))
+                    .add_sized(
+                        [48.0, 20.0],
+                        egui::DragValue::new(&mut cfg.special_act).range(0..=5),
+                    )
                     .changed();
             });
             dirty |= ui

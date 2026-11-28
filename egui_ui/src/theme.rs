@@ -181,9 +181,9 @@ pub fn dropdown<R>(
         w.hovered.weak_bg_fill = Palette::BG_BUTTON;
         w.hovered.bg_stroke = Stroke::new(1.0, Palette::BORDER_HOVER);
 
-        // Subtract horizontal button padding + border so total outer ComboBox width never exceeds
-        // `width` (prevents auto-expanding window width feedback loops when `width == available_width()`).
-        let inner_w = (width - ui.spacing().button_padding.x * 2.0 - 2.0).max(24.0);
+        // `ComboBox::width` in egui 0.36 sets the outer button width directly; subtract 1px margin
+        // so it aligns cleanly with TextEdit/Button rows without overflowing container width.
+        let inner_w = (width - 1.0).max(24.0);
         ComboBox::from_id_salt(id_salt)
             .selected_text(selected_text)
             .width(inner_w)
@@ -591,4 +591,122 @@ pub fn toggle_button(
         ui.add_enabled(enabled, btn)
     })
     .inner
+}
+
+/// Outcome of a single frame of [`confirm_dialog`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConfirmAction {
+    Pending,
+    Confirmed,
+    Cancelled,
+}
+
+/// Reusable centered confirmation window (`Cancel` / `confirm_label`) for destructive or
+/// important actions across any Grimlite Ri tool window.
+pub fn confirm_dialog(
+    ctx: &Context,
+    id: &str,
+    title: &str,
+    message: &str,
+    confirm_label: &str,
+    destructive: bool,
+) -> ConfirmAction {
+    let mut action = ConfirmAction::Pending;
+    let esc_pressed = ctx.input(|i| i.key_pressed(egui::Key::Escape));
+
+    let frame = egui::Frame::new()
+        .fill(Palette::BG_BASE)
+        .stroke(Stroke::new(1.0, Palette::BORDER_CONTROL))
+        .corner_radius(CornerRadius::same(7))
+        .inner_margin(Margin::symmetric(12, 10))
+        .shadow(egui::Shadow {
+            offset: [0, 6],
+            blur: 18,
+            spread: 0,
+            color: Color32::from_black_alpha(170),
+        });
+
+    egui::Window::new(title)
+        .id(egui::Id::new(id))
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .auto_sized()
+        .collapsible(false)
+        .resizable(false)
+        .order(egui::Order::Foreground)
+        .frame(frame)
+        .show(ctx, |ui| {
+            let content_w = 256.0;
+            ui.set_width(content_w);
+            ui.spacing_mut().item_spacing = egui::vec2(6.0, 6.0);
+            ui.spacing_mut().button_padding = egui::vec2(8.0, 3.0);
+
+            ui.label(
+                RichText::new(message)
+                    .size(12.0)
+                    .color(Palette::TEXT_PRIMARY),
+            );
+            ui.add_space(6.0);
+
+            ui.allocate_ui_with_layout(
+                egui::vec2(content_w, 24.0),
+                egui::Layout::right_to_left(egui::Align::Center),
+                |ui| {
+                    let confirm_resp = if destructive {
+                        danger_button(ui, confirm_label, true, [74.0, 23.0])
+                    } else {
+                        primary_button(ui, confirm_label, [74.0, 23.0])
+                    };
+                    if confirm_resp.clicked() {
+                        action = ConfirmAction::Confirmed;
+                    }
+
+                    if ui
+                        .add_sized([68.0, 23.0], egui::Button::new("Cancel"))
+                        .clicked()
+                        || esc_pressed
+                    {
+                        action = ConfirmAction::Cancelled;
+                    }
+                },
+            );
+        });
+
+    action
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn confirm_dialog_is_compact() {
+        let ctx = Context::default();
+        let mut rect = None;
+        for _ in 0..4 {
+            let mut input = egui::RawInput::default();
+            input.screen_rect = Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(1280.0, 800.0),
+            ));
+            let mut out = ctx.run_ui(input, |ui| {
+                let _ = confirm_dialog(
+                    ui.ctx(),
+                    "test_confirm_dialog",
+                    "Delete Account",
+                    "Remove saved account \"remake\"?",
+                    "Delete",
+                    true,
+                );
+            });
+            out.textures_delta.clear();
+            rect = ctx.memory(|m| m.area_rect(egui::Id::new("test_confirm_dialog")));
+        }
+        let r = rect.expect("confirm dialog should render");
+        assert!(
+            r.width() <= 310.0 && r.height() <= 130.0,
+            "confirm dialog should be compact, got {}x{}",
+            r.width(),
+            r.height()
+        );
+    }
 }

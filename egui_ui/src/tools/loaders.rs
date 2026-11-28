@@ -61,7 +61,7 @@ pub struct LoadersWindow {
     grabbing: Arc<AtomicBool>,
     selected_key: Option<String>,
     expanded_keys: HashSet<String>,
-    status: String,
+    status: Arc<Mutex<String>>,
 }
 
 impl LoadersWindow {
@@ -80,7 +80,13 @@ impl LoadersWindow {
             grabbing: Arc::new(AtomicBool::new(false)),
             selected_key: None,
             expanded_keys: HashSet::new(),
-            status: String::new(),
+            status: Arc::new(Mutex::new(String::new())),
+        }
+    }
+
+    fn set_status(&self, msg: impl Into<String>) {
+        if let Ok(mut s) = self.status.lock() {
+            *s = msg.into();
         }
     }
 
@@ -109,161 +115,182 @@ impl LoadersWindow {
     fn show_body(&mut self, ui: &mut Ui) {
         let is_quest = self.load_kind == LoadKind::Quest;
 
-        // 1. Loader card
-        theme::card(ui, "Loader", |ui| {
-            let right_w = 72.0;
+        // 1. Top: Loader card (pinned to top so it never feeds back into vertical window resize)
+        egui::Panel::top("grimlite_loaders_top")
+            .frame(egui::Frame::NONE)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                theme::card(ui, "Loader", |ui| {
+                    let right_w = 74.0;
+                    let spacing = ui.spacing().item_spacing.x;
 
-            // Row 1: ID input + quest count
-            ui.horizontal(|ui| {
-                let input_w = (ui.available_width() - right_w - 5.0).max(100.0);
-                let hint = match self.load_kind {
-                    LoadKind::Quest => "Quest ID (or 1,2,3)",
-                    LoadKind::Shop => "Shop ID",
-                    LoadKind::HairShop => "Hair shop ID",
-                    LoadKind::ArmorCustomizer => "No ID needed",
-                };
-                ui.add_enabled(
-                    self.load_kind != LoadKind::ArmorCustomizer,
-                    TextEdit::singleline(&mut self.load_input)
-                        .hint_text(hint)
-                        .desired_width(input_w),
-                );
-                ui.add_enabled_ui(is_quest, |ui| {
-                    theme::num_input(ui, &mut self.quest_count, 1..=30, right_w);
+                    // Row 1: ID input + quest count
+                    ui.horizontal(|ui| {
+                        let left_w = (ui.available_width() - right_w - spacing).max(80.0);
+                        let hint = match self.load_kind {
+                            LoadKind::Quest => "Quest ID (or 1,2,3)",
+                            LoadKind::Shop => "Shop ID",
+                            LoadKind::HairShop => "Hair shop ID",
+                            LoadKind::ArmorCustomizer => "No ID needed",
+                        };
+                        ui.add_enabled(
+                            self.load_kind != LoadKind::ArmorCustomizer,
+                            TextEdit::singleline(&mut self.load_input)
+                                .hint_text(hint)
+                                .desired_width(left_w),
+                        );
+                        ui.add_enabled_ui(is_quest, |ui| {
+                            theme::num_input(ui, &mut self.quest_count, 1..=30, right_w);
+                        });
+                    });
+
+                    // Row 2: Load type dropdown + Accept
+                    ui.horizontal(|ui| {
+                        let left_w = (ui.available_width() - right_w - spacing).max(80.0);
+                        theme::dropdown(ui, "loader_kind_cb", self.load_kind.label(), left_w, |ui| {
+                            for &k in LoadKind::ALL {
+                                ui.selectable_value(&mut self.load_kind, k, k.label());
+                            }
+                        });
+                        ui.add_enabled_ui(is_quest, |ui| {
+                            if ui
+                                .add_sized([right_w, 21.0], egui::Button::new("Accept"))
+                                .on_hover_text("Load and force-accept quest batch")
+                                .clicked()
+                            {
+                                self.trigger_force_accept();
+                            }
+                        });
+                    });
+
+                    // Row 3: Load button + Ghost checkbox
+                    ui.horizontal(|ui| {
+                        let left_w = (ui.available_width() - right_w - spacing).max(80.0);
+                        if theme::primary_button(ui, "Load", [left_w, 21.0]).clicked() {
+                            self.trigger_load();
+                        }
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(right_w, 21.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.add_enabled_ui(is_quest, |ui| {
+                                    ui.checkbox(&mut self.ghost_accept, "Ghost");
+                                });
+                            },
+                        );
+                    });
                 });
+                ui.add_space(4.0);
             });
 
-            // Row 2: Load type dropdown + F Accept
-            ui.horizontal(|ui| {
-                let cb_w = (ui.available_width() - right_w - 5.0).max(100.0);
-                theme::dropdown(ui, "loader_kind_cb", self.load_kind.label(), cb_w, |ui| {
-                    for &k in LoadKind::ALL {
-                        ui.selectable_value(&mut self.load_kind, k, k.label());
-                    }
-                });
-                ui.add_enabled_ui(is_quest, |ui| {
+        // 2. Bottom: Search + Grab controls (pinned to bottom — eliminates height-creep math)
+        egui::Panel::bottom("grimlite_loaders_bottom")
+            .frame(egui::Frame::NONE)
+            .show_separator_line(false)
+            .show(ui, |ui| {
+                ui.add_space(4.0);
+                let right_w = 68.0;
+                let spacing = ui.spacing().item_spacing.x;
+
+                // Search input + Clear (same right_w as Order By dropdown below so edges align)
+                ui.horizontal(|ui| {
+                    let left_w = (ui.available_width() - right_w - spacing).max(80.0);
+                    ui.add(
+                        TextEdit::singleline(&mut self.search_text)
+                            .hint_text("Filter grabbed items...")
+                            .desired_width(left_w),
+                    );
                     if ui
-                        .add_sized([right_w, 21.0], egui::Button::new("Accept"))
-                        .on_hover_text("Load and force-accept quest batch")
+                        .add_sized([right_w, 21.0], egui::Button::new("Clear"))
                         .clicked()
                     {
-                        self.trigger_force_accept();
+                        self.search_text.clear();
                     }
                 });
-            });
 
-            // Row 3: Load button + Ghost checkbox
-            ui.horizontal(|ui| {
-                let btn_w = (ui.available_width() - right_w - 5.0).max(100.0);
-                if theme::primary_button(ui, "Load", [btn_w, 21.0]).clicked() {
-                    self.trigger_load();
-                }
-                ui.add_enabled_ui(is_quest, |ui| {
-                    ui.checkbox(&mut self.ghost_accept, "Ghost");
-                });
-            });
-        });
-
-        ui.add_space(4.0);
-
-        // 2. Grabbed Tree + Search + Grab controls
-        let bottom_h = 84.0;
-        let tree_h = (ui.available_height() - bottom_h).max(110.0);
-
-        theme::list_box(ui, Some(tree_h), |ui| {
-            let nodes = self.grabbed.lock().map(|g| g.clone()).unwrap_or_default();
-            let query = self.search_text.trim().to_ascii_lowercase();
-            ScrollArea::vertical()
-                .auto_shrink([false, false])
-                .show(ui, |ui| {
-                    ui.spacing_mut().item_spacing.y = 2.0;
-                    if self.grabbing.load(Ordering::Acquire) {
-                        ui.label(RichText::new("Grabbing from game...").small().weak());
-                    } else if nodes.is_empty() {
-                        ui.label(
-                            RichText::new("Empty — select a type below and click Grab.\nRight-click any item for actions.")
-                                .small()
-                                .weak(),
+                // Grab type + Order By
+                ui.horizontal(|ui| {
+                    let left_w = (ui.available_width() - right_w - spacing).max(80.0);
+                    theme::dropdown(ui, "grabber_kind_cb", self.grab_kind.label(), left_w, |ui| {
+                        for &k in GrabKind::ALL {
+                            ui.selectable_value(&mut self.grab_kind, k, k.label());
+                        }
+                    });
+                    ui.add_enabled_ui(self.grab_kind.supports_order_by(), |ui| {
+                        theme::dropdown(
+                            ui,
+                            "grabber_order_cb",
+                            self.order_by.label(),
+                            right_w,
+                            |ui| {
+                                for &o in GrabOrderBy::ALL {
+                                    ui.selectable_value(&mut self.order_by, o, o.label());
+                                }
+                            },
                         );
-                    } else {
-                        let mut row_idx = 0usize;
-                        for (i, node) in nodes.iter().enumerate() {
-                            if !query.is_empty() && !node_matches(node, &query) {
-                                continue;
-                            }
-                            let path = i.to_string();
-                            self.render_node(ui, node, &path, 0, &mut row_idx, &query);
-                        }
-                        if row_idx == 0 {
-                            ui.label(RichText::new("No matching entries.").small().weak());
-                        }
+                    });
+                });
+
+                // Grab button + status
+                ui.horizontal(|ui| {
+                    let is_busy = self.grabbing.load(Ordering::Acquire);
+                    if ui
+                        .add_enabled_ui(!is_busy, |ui| {
+                            theme::primary_button(
+                                ui,
+                                if is_busy { "Grabbing..." } else { "Grab" },
+                                [96.0, 22.0],
+                            )
+                        })
+                        .inner
+                        .clicked()
+                    {
+                        self.trigger_grab();
+                    }
+                    let status_txt = self.status.lock().map(|s| s.clone()).unwrap_or_default();
+                    if !status_txt.is_empty() {
+                        ui.label(RichText::new(status_txt).small().weak());
                     }
                 });
-        });
-
-        ui.add_space(4.0);
-
-        // Search input
-        ui.horizontal(|ui| {
-            let clear_w = 46.0;
-            let w = (ui.available_width() - clear_w - 5.0).max(100.0);
-            ui.add(
-                TextEdit::singleline(&mut self.search_text)
-                    .hint_text("Filter grabbed items...")
-                    .desired_width(w),
-            );
-            if ui
-                .add_sized([clear_w, 21.0], egui::Button::new("Clear"))
-                .clicked()
-            {
-                self.search_text.clear();
-            }
-        });
-
-        // Grab type + Order By
-        ui.horizontal(|ui| {
-            let order_w = 68.0;
-            let cb_w = (ui.available_width() - order_w - 5.0).max(100.0);
-            theme::dropdown(ui, "grabber_kind_cb", self.grab_kind.label(), cb_w, |ui| {
-                for &k in GrabKind::ALL {
-                    ui.selectable_value(&mut self.grab_kind, k, k.label());
-                }
             });
-            ui.add_enabled_ui(self.grab_kind.supports_order_by(), |ui| {
-                theme::dropdown(
-                    ui,
-                    "grabber_order_cb",
-                    self.order_by.label(),
-                    order_w,
-                    |ui| {
-                        for &o in GrabOrderBy::ALL {
-                            ui.selectable_value(&mut self.order_by, o, o.label());
-                        }
-                    },
-                );
-            });
-        });
 
-        // Grab button + status
-        ui.horizontal(|ui| {
-            let is_busy = self.grabbing.load(Ordering::Acquire);
-            if ui
-                .add_enabled_ui(!is_busy, |ui| {
-                    theme::primary_button(
-                        ui,
-                        if is_busy { "Grabbing..." } else { "Grab" },
-                        [96.0, 22.0],
-                    )
-                })
-                .inner
-                .clicked()
-            {
-                self.trigger_grab();
-            }
-            if !self.status.is_empty() {
-                ui.label(RichText::new(&self.status).small().weak());
-            }
-        });
+        // 3. Center: Grabbed Tree filling exact remaining space between top and bottom panels
+        egui::CentralPanel::default()
+            .frame(egui::Frame::NONE)
+            .show(ui, |ui| {
+                let list_h = (ui.available_height() - 6.0).max(60.0);
+                theme::list_box(ui, Some(list_h), |ui| {
+                    let nodes = self.grabbed.lock().map(|g| g.clone()).unwrap_or_default();
+                    let query = self.search_text.trim().to_ascii_lowercase();
+                    ScrollArea::vertical()
+                        .id_salt("grimlite_loaders_tree_scroll")
+                        .auto_shrink([false, false])
+                        .show(ui, |ui| {
+                            ui.spacing_mut().item_spacing.y = 2.0;
+                            if self.grabbing.load(Ordering::Acquire) {
+                                ui.label(RichText::new("Grabbing from game...").small().weak());
+                            } else if nodes.is_empty() {
+                                ui.label(
+                                    RichText::new("Empty — select a type below and click Grab.\nRight-click any item for actions.")
+                                        .small()
+                                        .weak(),
+                                );
+                            } else {
+                                let mut row_idx = 0usize;
+                                for (i, node) in nodes.iter().enumerate() {
+                                    if !query.is_empty() && !node_matches(node, &query) {
+                                        continue;
+                                    }
+                                    let path = i.to_string();
+                                    self.render_node(ui, node, &path, 0, &mut row_idx, &query);
+                                }
+                                if row_idx == 0 {
+                                    ui.label(RichText::new("No matching entries.").small().weak());
+                                }
+                            }
+                        });
+                });
+            });
     }
 
     fn render_node(
@@ -340,7 +367,7 @@ impl LoadersWindow {
                 if ui.button("Load Shop").clicked() {
                     self.bot
                         .spawn_flash_action("loadShop", vec![FlashArg::from(*shop_id)]);
-                    self.status = format!("Loading shop {shop_id}");
+                    self.set_status(format!("Loading shop {shop_id}"));
                     ui.close();
                 }
                 ui.separator();
@@ -376,7 +403,7 @@ impl LoadersWindow {
                             FlashArg::from(*qty),
                         ],
                     );
-                    self.status = format!("Buying {name}");
+                    self.set_status(format!("Buying {name}"));
                     ui.close();
                 }
                 if ui.button("Add buy command").clicked() {
@@ -387,7 +414,7 @@ impl LoadersWindow {
                         qty: *qty,
                     });
                     self.bot.runner.update_config(cfg);
-                    self.status = format!("Added Buy: {name}");
+                    self.set_status(format!("Added Buy: {name}"));
                     ui.close();
                 }
                 ui.separator();
@@ -409,13 +436,13 @@ impl LoadersWindow {
                         });
                         self.bot.runner.update_config(cfg);
                     }
-                    self.status = format!("Added quest {quest_id}");
+                    self.set_status(format!("Added quest {quest_id}"));
                     ui.close();
                 }
                 if ui.button("Accept Quest").clicked() {
                     self.bot
                         .spawn_flash_action("acceptQuest", vec![FlashArg::from(*quest_id)]);
-                    self.status = format!("Accepted quest {quest_id}");
+                    self.set_status(format!("Accepted quest {quest_id}"));
                     ui.close();
                 }
                 if ui.button("Complete Quest (Once)").clicked() {
@@ -423,7 +450,7 @@ impl LoadersWindow {
                         "completeQuest",
                         vec![FlashArg::from(*quest_id), FlashArg::from(-1)],
                     );
-                    self.status = format!("Completed quest {quest_id}");
+                    self.set_status(format!("Completed quest {quest_id}"));
                     ui.close();
                 }
                 if ui.button("Complete Quest (Maxed)").clicked() {
@@ -435,20 +462,20 @@ impl LoadersWindow {
                             FlashArg::from(-1),
                         ],
                     );
-                    self.status = format!("Completed quest {quest_id} (max)");
+                    self.set_status(format!("Completed quest {quest_id} (max)"));
                     ui.close();
                 }
                 if ui.button("Load Quest").clicked() {
                     self.bot
                         .spawn_flash_action("loadQuest", vec![FlashArg::from(*quest_id)]);
-                    self.status = format!("Loaded quest {quest_id}");
+                    self.set_status(format!("Loaded quest {quest_id}"));
                     ui.close();
                 }
                 if !reqs.is_empty() {
                     ui.separator();
                     if ui.button("Copy all Reqs").clicked() {
                         ui.ctx().copy_text(format_items_clipboard(reqs));
-                        self.status = "Copied quest reqs".into();
+                        self.set_status("Copied quest reqs");
                         ui.close();
                     }
                     if ui.button("Copy Bypass Packet").clicked() {
@@ -456,7 +483,7 @@ impl LoadersWindow {
                             r#"{{"t":"xt","b":{{"r":-1,"o":{{"cmd":"updateQuest","iValue":{i_value},"iIndex":{i_slot}}}}}}}"#
                         );
                         ui.ctx().copy_text(pkt);
-                        self.status = "Copied bypass packet".into();
+                        self.set_status("Copied bypass packet");
                         ui.close();
                     }
                 }
@@ -472,12 +499,12 @@ impl LoadersWindow {
                         }
                     }
                     self.bot.runner.update_config(cfg);
-                    self.status = format!("Added {} items to whitelist", items.len());
+                    self.set_status(format!("Added {} items to whitelist", items.len()));
                     ui.close();
                 }
                 if ui.button("Copy all").clicked() {
                     ui.ctx().copy_text(format_items_clipboard(items));
-                    self.status = "Copied item list".into();
+                    self.set_status("Copied item list");
                     ui.close();
                 }
             }
@@ -488,7 +515,7 @@ impl LoadersWindow {
                         cfg.drops.push(name.clone());
                         self.bot.runner.update_config(cfg);
                     }
-                    self.status = format!("Whitelisted {name}");
+                    self.set_status(format!("Whitelisted {name}"));
                     ui.close();
                 }
                 self.menu_wiki_and_copy(ui, name);
@@ -499,7 +526,7 @@ impl LoadersWindow {
     fn menu_wiki_and_copy(&mut self, ui: &mut Ui, name: &str) {
         if ui.button("Copy name to clipboard").clicked() {
             ui.ctx().copy_text(name.to_string());
-            self.status = format!("Copied: {name}");
+            self.set_status(format!("Copied: {name}"));
             ui.close();
         }
         if ui.button("Go to Wikipage").clicked() {
@@ -529,28 +556,28 @@ impl LoadersWindow {
                             FlashArg::from(id),
                         ],
                     );
-                    self.status = format!("Hair shop {id}");
+                    self.set_status(format!("Hair shop {id}"));
                 } else {
-                    self.status = "Invalid Hair Shop ID".into();
+                    self.set_status("Invalid Hair Shop ID");
                 }
             }
             LoadKind::Shop => {
                 if let Ok(id) = raw.parse::<i32>() {
                     self.bot
                         .spawn_flash_action("loadShop", vec![FlashArg::from(id)]);
-                    self.status = format!("Shop {id}");
+                    self.set_status(format!("Shop {id}"));
                 } else {
-                    self.status = "Invalid Shop ID".into();
+                    self.set_status("Invalid Shop ID");
                 }
             }
             LoadKind::Quest => {
                 let ids = parse_quest_ids(&raw, self.quest_count);
                 if ids.is_empty() {
-                    self.status = "Invalid Quest ID".into();
+                    self.set_status("Invalid Quest ID");
                     return;
                 }
                 let bot = Arc::clone(&self.bot);
-                self.status = format!("Loading {} quest(s)", ids.len());
+                self.set_status(format!("Loading {} quest(s)", ids.len()));
                 let _ = std::thread::Builder::new()
                     .name("grimlite-load-quests".into())
                     .spawn(move || {
@@ -566,7 +593,7 @@ impl LoadersWindow {
                     "callGameFunction",
                     vec![FlashArg::from("openArmorCustomize")],
                 );
-                self.status = "Armor customizer".into();
+                self.set_status("Armor customizer");
             }
         }
     }
@@ -574,12 +601,12 @@ impl LoadersWindow {
     fn trigger_force_accept(&mut self) {
         let ids = parse_quest_ids(self.load_input.trim(), self.quest_count);
         if ids.is_empty() {
-            self.status = "Invalid Quest ID".into();
+            self.set_status("Invalid Quest ID");
             return;
         }
         let bot = Arc::clone(&self.bot);
         let ghost = self.ghost_accept;
-        self.status = format!("Force accepting {} quest(s)", ids.len());
+        self.set_status(format!("Force accepting {} quest(s)", ids.len()));
         let _ = std::thread::Builder::new()
             .name("grimlite-force-accept".into())
             .spawn(move || {
@@ -613,14 +640,19 @@ impl LoadersWindow {
         let order = self.order_by;
         let out = Arc::clone(&self.grabbed);
         let busy = Arc::clone(&self.grabbing);
-        self.status = format!("Grabbing {}...", kind.label());
+        let status = Arc::clone(&self.status);
+        self.set_status(format!("Grabbing {}...", kind.label()));
 
         let _ = std::thread::Builder::new()
             .name("grimlite-grabber".into())
             .spawn(move || {
                 let nodes = fetch_grabbed(&bot, kind, order);
+                let count = nodes.len();
                 if let Ok(mut guard) = out.lock() {
                     *guard = nodes;
+                }
+                if let Ok(mut s) = status.lock() {
+                    *s = format!("Grabbed {count} {}", kind.label());
                 }
                 busy.store(false, Ordering::Release);
             });
