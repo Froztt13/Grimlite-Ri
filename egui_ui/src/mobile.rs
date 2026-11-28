@@ -282,9 +282,7 @@ impl GrimliteUi {
         let aa_running = self.bot.auto_attack.is_running();
         let any_tab_busy = tabs.iter().any(|t| t.bot_running);
         let any_tab_logged = logged_in || tabs.iter().any(|t| t.logged_in);
-        let opts_active = self.options.lag_killer
-            || self.options.hide_players
-            || self.options.disable_animations;
+        let opts_active = self.bot.options.any_gameplay_active();
         let tools_open = self.mobile_flyout == Some(MobileFlyout::Tools)
             || self.tools.travels.open
             || self.tools.loaders.open

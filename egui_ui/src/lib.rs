@@ -13,7 +13,6 @@ use crate::tools::ToolsWindows;
 use egui::{Color32, Context, Panel, RichText, ScrollArea, Slider, Ui};
 use grimlite_bot::Bot;
 use grimlite_bot::host::FlashArg;
-use grimlite_bot::options::BotOptions;
 use std::sync::Arc;
 
 pub use mobile::MOBILE_RAIL_WIDTH;
@@ -620,7 +619,6 @@ pub struct GrimliteUi {
     pub(crate) mobile_flyout: Option<mobile::MobileFlyout>,
     pub(crate) mobile_combo_open: bool,
 
-    options: BotOptions,
     theme_applied: bool,
     app_icon: Option<egui::TextureHandle>,
     resources: system::ResourceMonitor,
@@ -641,7 +639,6 @@ impl GrimliteUi {
         pick_gbot: Option<FileDialogFn>,
         save_gbot: Option<FileDialogFn>,
     ) -> Self {
-        let options = bot.options.get();
         let bot_manager = BotManagerWindow::new(bot.clone(), pick_gbot, save_gbot);
         let tools = ToolsWindows::new(bot.clone());
         Self {
@@ -654,7 +651,6 @@ impl GrimliteUi {
             show_logs: false,
             mobile_flyout: None,
             mobile_combo_open: false,
-            options,
             theme_applied: false,
             app_icon: None,
             resources: system::ResourceMonitor::default(),
@@ -691,10 +687,10 @@ impl GrimliteUi {
     pub fn apply_picked_lag_killer_image(&mut self, path: &std::path::Path) {
         match grimlite_bot::options::prepare_lag_killer_wallpaper(path) {
             Ok(cached) => {
-                self.options.lag_killer_image = Some(cached.to_string_lossy().to_string());
-                self.options.lag_killer_image_rev =
-                    self.options.lag_killer_image_rev.wrapping_add(1);
-                self.bot.apply_options(self.options.clone());
+                self.bot.options.update(|opts| {
+                    opts.lag_killer_image = Some(cached.to_string_lossy().to_string());
+                    opts.lag_killer_image_rev = opts.lag_killer_image_rev.wrapping_add(1);
+                });
             }
             Err(e) => {
                 self.bot.logs.push_debug(format!("[LagKiller] {e}"));
@@ -1234,7 +1230,7 @@ impl GrimliteUi {
     }
 
     fn show_options_window(&mut self, ctx: &Context) {
-        self.options.hide_players = self.bot.options.get().hide_players;
+        let mut opts = self.bot.options.get();
         let mut open = self.show_options;
         let mut changed = false;
         let has_mobile_perf = self.mobile_perf.is_some();
@@ -1264,36 +1260,36 @@ impl GrimliteUi {
                                 cols[0].spacing_mut().item_spacing.y = 4.0;
                                 cols[1].spacing_mut().item_spacing.y = 4.0;
                                 changed |= cols[0]
-                                    .checkbox(&mut self.options.infinite_range, "Infinite Range")
+                                    .checkbox(&mut opts.infinite_range, "Infinite Range")
                                     .changed();
                                 changed |= cols[0]
-                                    .checkbox(&mut self.options.enemy_magnet, "Enemy Magnet")
+                                    .checkbox(&mut opts.enemy_magnet, "Enemy Magnet")
                                     .changed();
                                 changed |= cols[0]
-                                    .checkbox(&mut self.options.skip_cutscenes, "Skip Cutscenes")
+                                    .checkbox(&mut opts.skip_cutscenes, "Skip Cutscenes")
                                     .changed();
                                 changed |= cols[0]
-                                    .checkbox(&mut self.options.anti_counter, "Anti Counter")
+                                    .checkbox(&mut opts.anti_counter, "Anti Counter")
                                     .changed();
 
                                 changed |= cols[1]
-                                    .checkbox(&mut self.options.provoke_monsters, "Provoke Monsters")
+                                    .checkbox(&mut opts.provoke_monsters, "Provoke Monsters")
                                     .changed();
                                 changed |= cols[1]
-                                    .checkbox(&mut self.options.lag_killer, "Lag Killer")
+                                    .checkbox(&mut opts.lag_killer, "Lag Killer")
                                     .changed();
                                 if cols[1]
-                                    .checkbox(&mut self.options.hide_players, "Hide Players")
+                                    .checkbox(&mut opts.hide_players, "Hide Players")
                                     .changed()
                                 {
                                     changed = true;
                                     self.bot.spawn_flash_action(
                                         "setHidePlayers",
-                                        vec![FlashArg::Bool(self.options.hide_players)],
+                                        vec![FlashArg::Bool(opts.hide_players)],
                                     );
                                 }
                                 changed |= cols[1]
-                                    .checkbox(&mut self.options.disable_animations, "Disable FX / Anims")
+                                    .checkbox(&mut opts.disable_animations, "Disable FX / Anims")
                                     .changed();
                             });
                         });
@@ -1308,11 +1304,10 @@ impl GrimliteUi {
                                     ui.label("Walk Speed");
                                     ui.horizontal(|ui| {
                                         if ui
-                                            .add(Slider::new(&mut self.options.walk_speed, 4..=40))
+                                            .add(Slider::new(&mut opts.walk_speed, 4..=40))
                                             .changed()
                                         {
-                                            self.options.walk_speed_enabled =
-                                                self.options.walk_speed != 8;
+                                            opts.walk_speed_enabled = opts.walk_speed != 8;
                                             changed = true;
                                         }
                                     });
@@ -1320,7 +1315,7 @@ impl GrimliteUi {
 
                                     ui.label("Stage FPS");
                                     changed |= ui
-                                        .add(Slider::new(&mut self.options.fps, 10..=60))
+                                        .add(Slider::new(&mut opts.fps, 10..=60))
                                         .changed();
                                     ui.end_row();
                                 });
@@ -1459,7 +1454,7 @@ impl GrimliteUi {
                         ui.add_space(5.0);
 
                         theme::card(ui, "Lag Killer Wallpaper", |ui| {
-                            let has_wp = self.options.lag_killer_image.is_some();
+                            let has_wp = opts.lag_killer_image.is_some();
                             let display = if has_wp {
                                 "Cached (960×550)"
                             } else {
@@ -1480,7 +1475,7 @@ impl GrimliteUi {
                                     |ui| {
                                         if has_wp && ui.button("Clear").clicked() {
                                             grimlite_bot::options::clear_lag_killer_wallpaper_cache();
-                                            self.options.lag_killer_image = None;
+                                            opts.lag_killer_image = None;
                                             changed = true;
                                         }
                                         if ui
@@ -1496,11 +1491,10 @@ impl GrimliteUi {
                                                 &path,
                                             ) {
                                                 Ok(cached) => {
-                                                    self.options.lag_killer_image = Some(
+                                                    opts.lag_killer_image = Some(
                                                         cached.to_string_lossy().to_string(),
                                                     );
-                                                    self.options.lag_killer_image_rev = self
-                                                        .options
+                                                    opts.lag_killer_image_rev = opts
                                                         .lag_killer_image_rev
                                                         .wrapping_add(1);
                                                     changed = true;
@@ -1520,7 +1514,7 @@ impl GrimliteUi {
             },
         );
         if changed {
-            self.bot.apply_options(self.options.clone());
+            self.bot.apply_live_options(opts);
         }
         self.show_options = open;
     }

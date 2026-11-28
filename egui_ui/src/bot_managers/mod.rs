@@ -187,9 +187,6 @@ pub struct BotManagerWindow {
     temp_int_val: i32,
     index_val: i32,
     special_zone: SpecialZone,
-
-    // Options tab live toggle ("Enable options without starting")
-    enable_options_live: bool,
 }
 
 impl BotManagerWindow {
@@ -263,7 +260,6 @@ impl BotManagerWindow {
             temp_int_val: 0,
             index_val: 0,
             special_zone: SpecialZone::UltraDage,
-            enable_options_live: false,
         }
     }
 

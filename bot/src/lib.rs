@@ -357,6 +357,9 @@ impl Bot {
     pub fn stop_bot(&self) {
         let was_running = self.runner.is_running();
         self.runner.stop();
+        if was_running {
+            self.stop_active_options();
+        }
         if was_running && self.is_logged_in() {
             let snap = self.state.snapshot();
             let cell = snap.cell;
@@ -417,6 +420,41 @@ impl Bot {
 
     pub fn apply_options(&self, opts: BotOptions) {
         self.options.set(opts);
+    }
+
+    /// Updates the unified `OptionsStore` and mirrors gameplay toggles into `BotRunner`'s config
+    /// so the standalone Game Options window and Bot Manager's Options tab stay in sync.
+    pub fn apply_live_options(&self, opts: BotOptions) {
+        self.runner.sync_game_options_from_live(&opts);
+        self.options.set(opts);
+    }
+
+    /// Disables all active runtime gameplay options and immediately pushes the off-state to Flash
+    /// (called on `stop_bot`, runner exit, or disabling live preview).
+    pub fn stop_active_options(&self) {
+        let prev_hide = self.options.get().hide_players;
+        let stopped = self.options.stop_active_options();
+        let hide_changed = prev_hide != stopped.hide_players;
+        if let Some(flash) = self.flash() {
+            let _ = std::thread::Builder::new()
+                .name("grimlite-options-stop".into())
+                .spawn(move || {
+                    let _ = flash.call_bool("setEnemyMagnet", &[FlashArg::Bool(false)]);
+                    let _ = flash.call_bool("setLagKiller", &[FlashArg::Bool(false)]);
+                    if hide_changed {
+                        let _ = flash.call_bool(
+                            "setHidePlayers",
+                            &[FlashArg::Bool(stopped.hide_players)],
+                        );
+                    }
+                    let _ = flash.call_bool("setDisableAnimations", &[FlashArg::Bool(false)]);
+                    let _ = flash.call_bool("setSkipCutscenes", &[FlashArg::Bool(false)]);
+                    let _ = flash.call_bool(
+                        "setWalkSpeedOpt",
+                        &[FlashArg::Bool(false), FlashArg::from(8)],
+                    );
+                });
+        }
     }
 
     pub fn start_spammer(&self, packets: Vec<String>, delay_ms: u64) {

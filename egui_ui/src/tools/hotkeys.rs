@@ -187,22 +187,22 @@ impl HotkeysWindow {
                     HotkeyAction::ToggleLagKiller => {
                         let mut opts = self.bot.options.get();
                         opts.lag_killer = !opts.lag_killer;
-                        self.bot.apply_options(opts);
+                        self.bot.apply_live_options(opts);
                     }
                     HotkeyAction::ToggleInfiniteRange => {
                         let mut opts = self.bot.options.get();
                         opts.infinite_range = !opts.infinite_range;
-                        self.bot.apply_options(opts);
+                        self.bot.apply_live_options(opts);
                     }
                     HotkeyAction::ToggleEnemyMagnet => {
                         let mut opts = self.bot.options.get();
                         opts.enemy_magnet = !opts.enemy_magnet;
-                        self.bot.apply_options(opts);
+                        self.bot.apply_live_options(opts);
                     }
                     HotkeyAction::ToggleProvoke => {
                         let mut opts = self.bot.options.get();
                         opts.provoke_monsters = !opts.provoke_monsters;
-                        self.bot.apply_options(opts);
+                        self.bot.apply_live_options(opts);
                     }
                     HotkeyAction::Rest => {
                         self.bot.spawn_flash_action("rest", vec![]);

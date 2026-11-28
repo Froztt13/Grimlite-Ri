@@ -189,6 +189,26 @@ impl BotRunner {
         self.config.write().quests = quests;
     }
 
+    /// Mirrors live gameplay options edited in the standalone Game Options window into the
+    /// runner's `BotConfig` so Bot Manager's Options tab stays in sync.
+    pub fn sync_game_options_from_live(&self, opts: &crate::options::BotOptions) {
+        let mut cfg = self.config.write();
+        cfg.infinite_attack_range = opts.infinite_range;
+        cfg.provoke_monsters = opts.provoke_monsters;
+        cfg.enemy_magnet = opts.enemy_magnet;
+        cfg.lag_killer = opts.lag_killer;
+        cfg.hide_players = opts.hide_players;
+        cfg.disable_animations = opts.disable_animations;
+        cfg.skip_cutscenes = opts.skip_cutscenes;
+        cfg.walk_speed_enabled = opts.walk_speed_enabled;
+        cfg.walk_speed = opts.walk_speed.clamp(1, 99);
+        cfg.anti_counter = opts.anti_counter;
+        cfg.follow_check = opts.follow_enabled;
+        if opts.follow_enabled {
+            cfg.follow_name = opts.follow_player.clone();
+        }
+    }
+
     pub fn config(&self) -> BotConfig {
         self.config.read().clone()
     }
@@ -343,24 +363,7 @@ impl BotRunner {
                 let mut skill_cursor = 0usize;
                 let mut active_skill_set = String::new();
 
-                let mut opts = bot.options.get();
-                opts.infinite_range |= config.infinite_attack_range;
-                opts.provoke_monsters |= config.provoke_monsters;
-                opts.enemy_magnet |= config.enemy_magnet;
-                opts.lag_killer |= config.lag_killer;
-                opts.hide_players |= config.hide_players;
-                opts.skip_cutscenes |= config.skip_cutscenes;
-                opts.disable_animations |= config.disable_animations;
-                opts.anti_counter |= config.anti_counter;
-                if config.walk_speed_enabled {
-                    opts.walk_speed_enabled = true;
-                    opts.walk_speed = config.walk_speed;
-                }
-                if config.follow_check && !config.follow_name.trim().is_empty() {
-                    opts.follow_enabled = true;
-                    opts.follow_player = config.follow_name.clone();
-                }
-                bot.apply_options(opts);
+                bot.options.activate_for_bot(&config);
 
                 while running.load(Ordering::Acquire) {
                     if config.commands.is_empty() {
@@ -468,6 +471,8 @@ impl BotRunner {
                         sleep_interruptible(delay, &running);
                     }
                 }
+                running.store(false, Ordering::Release);
+                bot.stop_active_options();
                 bot.logs.push_debug("[Bot] Stopped");
             });
     }

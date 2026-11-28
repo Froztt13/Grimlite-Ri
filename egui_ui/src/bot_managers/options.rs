@@ -1,9 +1,11 @@
 //! Bot Manager — Options tab.
+//! Shares the unified `bot.options` (`OptionsStore`) engine with the standalone Game Options window.
 
 use super::{BotManagerWindow, group_box, two_columns};
 use crate::theme;
-use egui::{TextEdit, Ui};
+use egui::{RichText, TextEdit, Ui};
 use grimlite_bot::gbot::BotConfig;
+use grimlite_bot::host::FlashArg;
 use grimlite_bot::options::AQW_SERVERS;
 
 impl BotManagerWindow {
@@ -11,7 +13,10 @@ impl BotManagerWindow {
 
     pub(super) fn show_options_tab(&mut self, ui: &mut Ui, cfg: &mut BotConfig) -> bool {
         let mut dirty = false;
-        let mut live_opt_changed = false;
+        let mut opt_changed = false;
+        let mut hide_players_toggled = false;
+        let bot_running = self.bot.runner.is_running();
+        let mut live_enabled = self.bot.options.is_live_without_starting();
 
         if cfg.server.trim().is_empty() {
             cfg.server = AQW_SERVERS[0].to_string();
@@ -92,7 +97,7 @@ impl BotManagerWindow {
                     .changed();
             });
 
-            // Column 2: Game Options (mirrors Grimlite-Li tabOptions)
+            // Column 2: Game Options (unified with standalone Game Options window via `bot.options`)
             group_box(&mut cols[1], "Game Options", |ui| {
                 let c1 = ui
                     .checkbox(&mut cfg.infinite_attack_range, "Infinite attack range")
@@ -103,7 +108,13 @@ impl BotManagerWindow {
                 let c3 = ui.checkbox(&mut cfg.enemy_magnet, "Enemy magnet").changed();
                 let c4 = ui.checkbox(&mut cfg.lag_killer, "Lag killer").changed();
                 let c5 = ui.checkbox(&mut cfg.hide_players, "Hide players").changed();
+                if c5 {
+                    hide_players_toggled = true;
+                }
                 let c6 = ui
+                    .checkbox(&mut cfg.disable_animations, "Disable FX / Anims")
+                    .changed();
+                let c7 = ui
                     .checkbox(&mut cfg.skip_cutscenes, "Skip cutscenes")
                     .changed();
 
@@ -115,11 +126,6 @@ impl BotManagerWindow {
                         .changed()
                     {
                         c8 = true;
-                        // Immediate walk speed toggle like Grimlite-Li chkWalkSpeed_CheckedChanged
-                        let mut opts = self.bot.options.get();
-                        opts.walk_speed_enabled = cfg.walk_speed_enabled;
-                        opts.walk_speed = cfg.walk_speed.clamp(1, 99);
-                        self.bot.apply_options(opts);
                     }
                     ui.add_enabled_ui(!cfg.walk_speed_enabled, |ui| {
                         if theme::num_input(ui, &mut cfg.walk_speed, 1..=99, 46.0).changed() {
@@ -131,7 +137,7 @@ impl BotManagerWindow {
                 // Follow player (locked while live options are active, matching chkEnableSettings)
                 let mut c9 = false;
                 ui.horizontal(|ui| {
-                    ui.add_enabled_ui(!self.enable_options_live, |ui| {
+                    ui.add_enabled_ui(!live_enabled, |ui| {
                         c9 |= ui.checkbox(&mut cfg.follow_check, "Follow").changed();
                         c9 |= ui
                             .add(
@@ -148,55 +154,53 @@ impl BotManagerWindow {
                     .checkbox(&mut cfg.anti_counter, "Anti counter attack")
                     .changed();
 
-                if c1 || c2 || c3 || c4 || c5 || c6 || c8 || c9 || c10 {
+                if c1 || c2 || c3 || c4 || c5 || c6 || c7 || c8 || c9 || c10 {
                     dirty = true;
-                    live_opt_changed = true;
+                    opt_changed = true;
                 }
 
                 ui.add_space(3.0);
                 ui.separator();
-                if ui
-                    .checkbox(
-                        &mut self.enable_options_live,
-                        "Enable options without starting",
-                    )
-                    .changed()
-                {
-                    live_opt_changed = true;
-                }
+                ui.horizontal(|ui| {
+                    if ui
+                        .checkbox(&mut live_enabled, "Enable options without starting")
+                        .changed()
+                    {
+                        self.bot.options.set_live_without_starting(live_enabled);
+                        if live_enabled {
+                            self.bot.options.sync_from_bot_config(cfg);
+                            self.bot.spawn_flash_action(
+                                "setHidePlayers",
+                                vec![FlashArg::Bool(cfg.hide_players)],
+                            );
+                        } else if !bot_running {
+                            self.bot.stop_active_options();
+                        }
+                    }
+                    let active_now = bot_running || live_enabled;
+                    ui.label(
+                        RichText::new(if active_now { "Active" } else { "Idle" })
+                            .small()
+                            .color(if active_now {
+                                theme::Palette::SUCCESS
+                            } else {
+                                theme::Palette::TEXT_MUTED
+                            }),
+                    );
+                });
             });
         });
 
-        if live_opt_changed {
-            let mut opts = self.bot.options.get();
-            if self.enable_options_live {
-                opts.infinite_range = cfg.infinite_attack_range;
-                opts.provoke_monsters = cfg.provoke_monsters;
-                opts.enemy_magnet = cfg.enemy_magnet;
-                opts.lag_killer = cfg.lag_killer;
-                opts.hide_players = cfg.hide_players;
-                opts.skip_cutscenes = cfg.skip_cutscenes;
-                opts.disable_animations = cfg.disable_animations;
-                opts.walk_speed_enabled = cfg.walk_speed_enabled;
-                opts.walk_speed = cfg.walk_speed.clamp(1, 99);
-                opts.anti_counter = cfg.anti_counter;
-                opts.follow_enabled = cfg.follow_check && !cfg.follow_name.trim().is_empty();
-                opts.follow_player = cfg.follow_name.clone();
-            } else if !self.bot.runner.is_running() {
-                opts.infinite_range = false;
-                opts.provoke_monsters = false;
-                opts.enemy_magnet = false;
-                opts.lag_killer = false;
-                opts.hide_players = false;
-                opts.skip_cutscenes = false;
-                opts.disable_animations = false;
-                opts.anti_counter = cfg.anti_counter;
-                opts.follow_enabled = false;
+        if opt_changed && (bot_running || live_enabled) {
+            self.bot.options.sync_from_bot_config(cfg);
+            if hide_players_toggled {
+                self.bot.spawn_flash_action(
+                    "setHidePlayers",
+                    vec![FlashArg::Bool(cfg.hide_players)],
+                );
             }
-            self.bot.apply_options(opts);
         }
 
         dirty
     }
-
 }
