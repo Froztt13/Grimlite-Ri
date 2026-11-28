@@ -39,7 +39,6 @@ impl AutoAttack {
             .name("grimlite-auto-attack".into())
             .spawn(move || {
                 bot.logs.push_debug("[Auto Attack] Started");
-                let mut skill_idx = 0usize;
                 while running.load(Ordering::Acquire) {
                     if !bot.is_logged_in() {
                         running.store(false, Ordering::Release);
@@ -70,9 +69,8 @@ impl AutoAttack {
                         }
 
                         if has_target {
-                            let key = ((skill_idx % 4) + 1).to_string();
-                            skill_idx = skill_idx.wrapping_add(1);
-                            let _ = flash.call_bool("useSkill", &[FlashArg::from(key)]);
+                            let mut smart = bot.smart_combat.lock();
+                            crate::commands::combat::cast_smart_skill(&flash, &mut smart);
                         }
                     }
 

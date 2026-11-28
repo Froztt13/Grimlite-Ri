@@ -2,8 +2,11 @@
 //! (aligned with Grimlite-Li `Grimoire/Botting/Commands/Combat/`).
 
 use super::{CommandContext, map, quest};
+use crate::flash::Flash;
 use crate::gbot::{BotCommand, SkillEntry};
 use crate::host::FlashArg;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 pub fn execute(ctx: &mut CommandContext<'_>, cmd: &BotCommand) -> usize {
@@ -313,6 +316,8 @@ fn active_skill_range(skills: &[SkillEntry], active_set: &str) -> (usize, usize)
 }
 
 pub fn kill_once(ctx: &mut CommandContext<'_>, monster: &str) {
+    let _ = ctx.flash.call_bool("setSpawnPoint", &[]);
+
     // Wait up to 3s for monster to respawn (matches Grimlite-Li CmdKill.cs line 40)
     ctx.wait_until(3000, 150, || {
         ctx.flash
@@ -376,14 +381,407 @@ pub fn kill_once(ctx: &mut CommandContext<'_>, monster: &str) {
                     .call_bool("useSkill", &[FlashArg::from(skill.index.as_str())]);
             }
         } else {
-            let key = ((*ctx.skill_cursor % 4) + 1).to_string();
-            *ctx.skill_cursor = ctx.skill_cursor.wrapping_add(1);
-            let _ = ctx.flash.call_bool("useSkill", &[FlashArg::from(key)]);
+            let mut smart = ctx.bot.smart_combat.lock();
+            cast_smart_skill(ctx.flash, &mut smart);
         }
         ctx.sleep(skill_delay);
     }
 
     if ctx.flash.call_bool("hasTarget", &[]).unwrap_or(false) {
         let _ = ctx.flash.call_bool("cancelTarget", &[]);
+    }
+}
+
+/// Live combat snapshot returned in a single JSON call from Flash (`getCombatState`).
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CombatState {
+    #[serde(default)]
+    pub class_name: String,
+    #[serde(default)]
+    pub hp: i32,
+    #[serde(default = "default_max_hp")]
+    pub max_hp: i32,
+    #[serde(default)]
+    pub mp: i32,
+    #[serde(default)]
+    pub has_target: bool,
+    #[serde(default)]
+    pub counter_attack: bool,
+    #[serde(default)]
+    pub ready: Vec<bool>,
+    #[serde(default)]
+    pub self_auras: HashMap<String, i32>,
+    #[serde(default)]
+    pub target_auras: HashMap<String, i32>,
+}
+
+fn default_max_hp() -> i32 {
+    1
+}
+
+fn normalize_aura_key(name: &str) -> String {
+    name.chars()
+        .filter(|c| !c.is_whitespace() && *c != '-' && *c != '_')
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+
+impl CombatState {
+    pub fn hp_pct(&self) -> i32 {
+        let max_hp = self.max_hp.max(1) as f64;
+        ((self.hp as f64 / max_hp) * 100.0) as i32
+    }
+
+    pub fn self_aura(&self, name: &str) -> i32 {
+        let key = normalize_aura_key(name);
+        self.self_auras.get(&key).copied().unwrap_or(0)
+    }
+
+    pub fn target_aura(&self, name: &str) -> i32 {
+        if !self.has_target {
+            return 0;
+        }
+        let key = normalize_aura_key(name);
+        self.target_auras.get(&key).copied().unwrap_or(0)
+    }
+
+    pub fn normalized_class(&self) -> String {
+        self.class_name.trim().to_ascii_lowercase()
+    }
+
+    /// Evaluates class-specific HP/MP/aura safety guards (ported from `AutoBattle.as::canUseSkill`).
+    pub fn can_use_skill(&self, skill_idx: usize) -> bool {
+        let my_hp = self.hp_pct();
+        let my_mp = self.mp;
+        match self.normalized_class().as_str() {
+            "void highlord" => !(my_hp < 60 && (skill_idx == 1 || skill_idx == 3)),
+            "scarlet sorceress" => !(my_hp < 50 && (skill_idx == 1 || skill_idx == 4)),
+            "dragon of time" => !(my_hp < 50 && (skill_idx == 1 || skill_idx == 3)),
+            "lich" => !((my_hp < 70 && skill_idx == 4) || (my_mp > 40 && skill_idx == 3)),
+            "archpaladin" => !(my_hp > 60 && skill_idx == 2),
+            "hollowborn vindicator" => {
+                let has_safeguard = self.self_aura("Safeguard") > 0;
+                let has_decay = self.self_aura("Decay") > 0;
+                if (skill_idx == 1 || skill_idx == 3) && has_safeguard {
+                    return true;
+                }
+                if skill_idx == 2 && !has_safeguard && has_decay {
+                    return true;
+                }
+                if skill_idx == 4 && !has_safeguard && !has_decay {
+                    return true;
+                }
+                false
+            }
+            "king's echo" | "kings echo" => {
+                !(skill_idx == 3 && self.self_aura("Waiting For Corvak") > 0)
+            }
+            "master ranger" | "ranger" => {
+                if skill_idx == 3 && self.self_aura("Marks").max(self.target_aura("Marks")) < 6 {
+                    return false;
+                }
+                if skill_idx == 4 && self.self_aura("Vampiric Shot") > 0 {
+                    return false;
+                }
+                true
+            }
+            "kathool adept" => !(skill_idx == 3 && self.self_aura("Feeding") < 5),
+            _ => true,
+        }
+    }
+
+    pub fn is_castable(&self, skill_idx: usize) -> bool {
+        self.ready.get(skill_idx).copied().unwrap_or(false) && self.can_use_skill(skill_idx)
+    }
+}
+
+/// Persistent per-bot smart class combo state (ported from `AutoBattle.as`).
+#[derive(Clone, Debug, Default)]
+pub struct SmartCombatState {
+    pub skill_index: usize,
+    pub temporal_rift: u32,
+}
+
+impl SmartCombatState {
+    pub fn reset(&mut self) {
+        self.skill_index = 0;
+        self.temporal_rift = 0;
+    }
+
+    /// Picks the next skill index (`0..=4`) to cast based on equipped class, auras, HP/MP,
+    /// cooldowns, and mana availability. Returns `None` when paused/counter-attacking or no skill
+    /// is castable right now.
+    pub fn choose_skill(&mut self, state: &CombatState) -> Option<usize> {
+        if !state.has_target || state.counter_attack {
+            return None;
+        }
+
+        match state.normalized_class().as_str() {
+            "chrono shadowslayer" | "chrono shadowhunter" => self.choose_csh(state),
+            "arcana invoker" => self.choose_arcana_invoker(state),
+            "king's echo" | "kings echo" => self.choose_kings_echo(state),
+            "master ranger" | "ranger" => self.choose_ranger(state),
+            "kathool adept" => self.choose_kathool_adept(state),
+            _ => self.choose_rotating(state, |_| false),
+        }
+    }
+
+    fn choose_csh(&mut self, state: &CombatState) -> Option<usize> {
+        if self.temporal_rift >= 4 {
+            if state.is_castable(4) {
+                self.temporal_rift = 0;
+                return Some(4);
+            }
+            return None;
+        }
+        if state.self_aura("Rounds Empty") > 0 {
+            return state.is_castable(1).then_some(1);
+        }
+        if state.self_aura("Temporal Rift") < 1 {
+            return state.is_castable(2).then_some(2);
+        }
+        if state.is_castable(3) {
+            self.temporal_rift += 1;
+            return Some(3);
+        }
+        None
+    }
+
+    fn choose_arcana_invoker(&self, state: &CombatState) -> Option<usize> {
+        let has_world = state.self_aura("XXI - The World") > 0;
+        let has_judgement = state.self_aura("XX - Judgement") > 0;
+        let end_of_the_world = state.self_aura("End of The World");
+        let has_fool = state.self_aura("0 - The Fool") > 0;
+
+        if !has_world {
+            if !has_fool {
+                if state.is_castable(1) {
+                    return Some(1);
+                }
+            } else if has_judgement && state.is_castable(1) {
+                return Some(1);
+            }
+        }
+
+        if state.is_castable(2) {
+            return Some(2);
+        }
+        if state.is_castable(4) {
+            return Some(4);
+        }
+        if (has_judgement || state.mp > 50) && state.is_castable(3) {
+            return Some(3);
+        }
+        if end_of_the_world > 10 && state.is_castable(1) {
+            return Some(1);
+        }
+        None
+    }
+
+    fn choose_kings_echo(&mut self, state: &CombatState) -> Option<usize> {
+        let has_waiting = state.self_aura("Waiting For Corvak") > 0;
+        self.choose_rotating(state, |idx| idx == 3 && has_waiting)
+    }
+
+    fn choose_ranger(&mut self, state: &CombatState) -> Option<usize> {
+        let marks = state.self_aura("Marks").max(state.target_aura("Marks"));
+        let has_vampiric = state.self_aura("Vampiric Shot") > 0;
+        if marks >= 6 && state.is_castable(3) {
+            return Some(3);
+        }
+        self.choose_rotating(state, |idx| {
+            (idx == 3 && marks < 6) || (idx == 4 && has_vampiric)
+        })
+    }
+
+    fn choose_kathool_adept(&mut self, state: &CombatState) -> Option<usize> {
+        let feeding = state.self_aura("Feeding");
+        if feeding >= 5 && state.is_castable(3) {
+            return Some(3);
+        }
+        self.choose_rotating(state, |idx| idx == 3 && feeding < 5)
+    }
+
+    fn choose_rotating(
+        &mut self,
+        state: &CombatState,
+        skip: impl Fn(usize) -> bool,
+    ) -> Option<usize> {
+        for i in 0..5 {
+            let idx = (self.skill_index + i) % 5;
+            if skip(idx) {
+                continue;
+            }
+            if state.is_castable(idx) {
+                self.skill_index = (idx + 1) % 5;
+                return Some(idx);
+            }
+        }
+        None
+    }
+}
+
+/// Fetches live combat state from Flash in one JSON call, chooses the optimal class-combo skill
+/// in Rust, and casts it. Falls back to `1..=4` rotation if `getCombatState` is unavailable
+/// (e.g. headless mode).
+pub fn cast_smart_skill(flash: &Flash, smart: &mut SmartCombatState) -> bool {
+    match flash.call_json::<CombatState>("getCombatState", &[]) {
+        Ok(state) => {
+            if let Some(idx) = smart.choose_skill(&state) {
+                let _ = flash.call_bool("useSkill", &[FlashArg::from(idx.to_string())]);
+                return true;
+            }
+            false
+        }
+        Err(_) => {
+            let key = ((smart.skill_index % 4) + 1).to_string();
+            smart.skill_index = smart.skill_index.wrapping_add(1);
+            let _ = flash.call_bool("useSkill", &[FlashArg::from(key)]);
+            true
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ready_state(class_name: &str) -> CombatState {
+        CombatState {
+            class_name: class_name.to_string(),
+            hp: 4000,
+            max_hp: 4000,
+            mp: 100,
+            has_target: true,
+            counter_attack: false,
+            ready: vec![true, true, true, true, true],
+            self_auras: HashMap::new(),
+            target_auras: HashMap::new(),
+        }
+    }
+
+    fn with_self_aura(mut state: CombatState, name: &str, val: i32) -> CombatState {
+        state.self_auras.insert(normalize_aura_key(name), val);
+        state
+    }
+
+    fn with_target_aura(mut state: CombatState, name: &str, val: i32) -> CombatState {
+        state.target_auras.insert(normalize_aura_key(name), val);
+        state
+    }
+
+    #[test]
+    fn counter_attack_blocks_all_skills() {
+        let mut smart = SmartCombatState::default();
+        let mut s = ready_state("Void Highlord");
+        s.counter_attack = true;
+        assert_eq!(smart.choose_skill(&s), None);
+    }
+
+    #[test]
+    fn csh_combo_cycles_reload_rift_and_nuke() {
+        let mut smart = SmartCombatState::default();
+
+        // Reload when Rounds Empty is active
+        let s_reload = with_self_aura(ready_state("Chrono ShadowSlayer"), "Rounds Empty", 1);
+        assert_eq!(smart.choose_skill(&s_reload), Some(1));
+
+        // Open with skill 2 when Temporal Rift < 1
+        let s_no_rift = ready_state("Chrono ShadowHunter");
+        assert_eq!(smart.choose_skill(&s_no_rift), Some(2));
+
+        // Stack skill 3 four times, then nuke with skill 4 and reset counter
+        let s_rift = with_self_aura(ready_state("Chrono ShadowSlayer"), "Temporal Rift", 1);
+        for _ in 0..4 {
+            assert_eq!(smart.choose_skill(&s_rift), Some(3));
+        }
+        assert_eq!(smart.temporal_rift, 4);
+        assert_eq!(smart.choose_skill(&s_rift), Some(4));
+        assert_eq!(smart.temporal_rift, 0);
+    }
+
+    #[test]
+    fn arcana_invoker_phases_and_nuke() {
+        let mut smart = SmartCombatState::default();
+
+        // Pre-world without The Fool -> draw with skill 1
+        let s1 = ready_state("Arcana Invoker");
+        assert_eq!(smart.choose_skill(&s1), Some(1));
+
+        // Pre-world with Fool + Judgement -> advance to The World with skill 1
+        let s2 = with_self_aura(
+            with_self_aura(ready_state("Arcana Invoker"), "0 - The Fool", 1),
+            "XX - Judgement",
+            1,
+        );
+        assert_eq!(smart.choose_skill(&s2), Some(1));
+
+        // In The World with 2/4 on CD, MP <= 50, End of The World > 10 -> nuke with skill 1
+        let mut s3 = with_self_aura(
+            with_self_aura(ready_state("Arcana Invoker"), "XXI - The World", 1),
+            "End of The World",
+            11,
+        );
+        s3.ready = vec![true, true, false, true, false];
+        s3.mp = 40;
+        assert_eq!(smart.choose_skill(&s3), Some(1));
+    }
+
+    #[test]
+    fn ranger_and_kathool_prioritize_stack_nukes() {
+        let mut smart = SmartCombatState::default();
+
+        // Master Ranger skips 3 when Marks < 6 and prioritizes 3 when target has 6 Marks
+        let s_low = ready_state("Master Ranger");
+        assert!(!s_low.can_use_skill(3));
+        let s_six = with_target_aura(ready_state("Master Ranger"), "Marks", 6);
+        assert_eq!(smart.choose_skill(&s_six), Some(3));
+
+        // Kathool Adept skips 3 when Feeding < 5 and prioritizes 3 at 5 stacks
+        let s_k_low = ready_state("Kathool Adept");
+        assert!(!s_k_low.can_use_skill(3));
+        let s_k_five = with_self_aura(ready_state("Kathool Adept"), "Feeding", 5);
+        assert_eq!(smart.choose_skill(&s_k_five), Some(3));
+    }
+
+    #[test]
+    fn class_guards_respect_hp_mp_and_auras() {
+        // Void Highlord: skip 1 & 3 under 60% HP
+        let mut vhl = ready_state("Void Highlord");
+        vhl.hp = 2000;
+        assert!(!vhl.can_use_skill(1));
+        assert!(vhl.can_use_skill(2));
+        assert!(!vhl.can_use_skill(3));
+        assert!(vhl.can_use_skill(4));
+
+        // Lich: skip 4 under 70% HP, skip 3 when MP > 40
+        let mut lich = ready_state("Lich");
+        lich.hp = 2500;
+        lich.mp = 60;
+        assert!(!lich.can_use_skill(3));
+        assert!(!lich.can_use_skill(4));
+        assert!(lich.can_use_skill(2));
+
+        // ArchPaladin: skip 2 above 60% HP
+        let ap = ready_state("ArchPaladin");
+        assert!(!ap.can_use_skill(2));
+
+        // Hollowborn Vindicator: Safeguard -> 1/3, Decay -> 2, neither -> 4
+        let hbv_none = ready_state("Hollowborn Vindicator");
+        assert!(!hbv_none.can_use_skill(1));
+        assert!(!hbv_none.can_use_skill(2));
+        assert!(hbv_none.can_use_skill(4));
+        let hbv_decay = with_self_aura(ready_state("Hollowborn Vindicator"), "Decay", 1);
+        assert!(hbv_decay.can_use_skill(2));
+        assert!(!hbv_decay.can_use_skill(4));
+        let hbv_safe = with_self_aura(ready_state("Hollowborn Vindicator"), "Safeguard", 1);
+        assert!(hbv_safe.can_use_skill(1));
+        assert!(hbv_safe.can_use_skill(3));
+        assert!(!hbv_safe.can_use_skill(2));
+
+        // King's Echo: skip 3 while Waiting For Corvak is active
+        let ke = with_self_aura(ready_state("King's Echo"), "Waiting For Corvak", 1);
+        assert!(!ke.can_use_skill(3));
     }
 }

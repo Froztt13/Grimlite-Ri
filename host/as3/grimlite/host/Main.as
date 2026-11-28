@@ -141,6 +141,7 @@ public class Main extends MovieClip {
         expose("getCells", getCells);
 
         // Combat
+        expose("getCombatState", getCombatState);
         expose("attackMonster", attackMonster);
         expose("useSkill", useSkill);
         expose("forceUseSkill", forceUseSkill);
@@ -637,6 +638,97 @@ public class Main extends MovieClip {
     private function getCells():String { return World.GetCells(); }
 
     // ---- Combat ----
+
+    private static function collectAuras(raw:*):Object {
+        var map:Object = {};
+        if (raw == null) {
+            return map;
+        }
+        for each (var aura:Object in raw) {
+            if (aura != null && aura.nam != null) {
+                var key:String = String(aura.nam).toLowerCase().replace(/[\s\-_]/g, "");
+                if (key.length > 0) {
+                    var n:Number = parseFloat(aura.val);
+                    var v:int = (!isNaN(n) && n > 0) ? int(Math.ceil(n)) : 1;
+                    if (map[key] == null || v > int(map[key])) {
+                        map[key] = v;
+                    }
+                }
+            }
+        }
+        return map;
+    }
+
+    private function getCombatState():String {
+        var out:Object = {
+            className: "",
+            hp: 0,
+            maxHp: 1,
+            mp: 0,
+            hasTarget: false,
+            counterAttack: false,
+            ready: [false, false, false, false, false],
+            selfAuras: {},
+            targetAuras: {}
+        };
+        try {
+            if (game != null && game.world != null && game.world.myAvatar != null) {
+                var av:* = game.world.myAvatar;
+                var data:* = av.objData;
+                var leaf:* = av.dataLeaf;
+                if (data != null && data.strClassName != null) {
+                    out.className = String(data.strClassName);
+                }
+                if (leaf != null) {
+                    out.hp = int(leaf.intHP);
+                    out.maxHp = int(leaf.intHPMax) > 0 ? int(leaf.intHPMax) : 1;
+                    out.mp = int(leaf.intMP);
+                    out.selfAuras = collectAuras(leaf.auras);
+                } else if (data != null) {
+                    out.hp = int(data.intHP);
+                    out.maxHp = int(data.intHPMax) > 0 ? int(data.intHPMax) : 1;
+                    out.mp = int(data.intMP);
+                }
+                var hasTgt:Boolean = av.target != null && av.target.dataLeaf != null && int(av.target.dataLeaf.intHP) > 0;
+                out.hasTarget = hasTgt;
+                if (hasTgt) {
+                    var tAuras:* = av.target.dataLeaf.auras;
+                    out.targetAuras = collectAuras(tAuras);
+                    if (tAuras != null) {
+                        for each (var ta:Object in tAuras) {
+                            if (ta != null && ta.nam != null && String(ta.nam).toLowerCase().indexOf("counter attack") > -1) {
+                                out.counterAttack = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                var cmc:Number = 1.0;
+                if (leaf != null && leaf.sta != null && leaf.sta.$cmc != null) {
+                    var parsedCmc:Number = Number(leaf.sta.$cmc);
+                    if (!isNaN(parsedCmc)) {
+                        cmc = parsedCmc < 0 ? 0 : parsedCmc;
+                    }
+                }
+                var active:Array = (game.world.actions != null) ? (game.world.actions.active as Array) : null;
+                if (active != null) {
+                    for (var i:int = 0; i < 5; i++) {
+                        var sk:Object = active[i];
+                        if (sk == null) {
+                            continue;
+                        }
+                        var baseMp:Number = Number(sk.mp || 0);
+                        var reqMp:int = baseMp > 0 ? int(Math.round(baseMp * cmc)) : 0;
+                        var enoughMp:Boolean = reqMp <= 0 || out.mp >= reqMp;
+                        if (sk.isOK && !sk.skillLock && enoughMp && Player.SkillAvailable(String(i)) == 0) {
+                            out.ready[i] = true;
+                        }
+                    }
+                }
+            }
+        } catch (e:Error) {}
+        return JSON.stringify(out);
+    }
 
     private function isMonsterAvailable(name:String = "*"):String {
         return World.IsMonsterAvailable(name) == Root.TrueString ? "true" : "false";

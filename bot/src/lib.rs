@@ -24,7 +24,7 @@ use crate::runner::BotRunner;
 use crate::spammer::PacketSpammer;
 use crate::state::{GameState, PlayerSnapshot, StatePacketInterceptor};
 use crate::tamper::TamperEngine;
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -46,6 +46,7 @@ pub struct Bot {
     pub maid: Arc<MaidEngine>,
     pub anti_counter: Arc<AntiCounterHandler>,
     pub special_handler: Arc<SpecialHandlerManager>,
+    pub smart_combat: Mutex<commands::combat::SmartCombatState>,
     game_loaded: AtomicBool,
     worker_started: AtomicBool,
     inv_syncing: AtomicBool,
@@ -85,6 +86,7 @@ impl Bot {
             maid: Arc::new(MaidEngine::default()),
             anti_counter: anti_counter.clone(),
             special_handler: special_handler.clone(),
+            smart_combat: Mutex::new(commands::combat::SmartCombatState::default()),
             game_loaded: AtomicBool::new(false),
             worker_started: AtomicBool::new(false),
             inv_syncing: AtomicBool::new(false),
