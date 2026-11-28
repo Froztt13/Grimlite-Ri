@@ -353,6 +353,9 @@ impl MaidEngine {
         self.on_pause.store(false, Ordering::Release);
         self.counter_paused.store(false, Ordering::Release);
 
+        // Always enable Infinite Range once directly via Flash when Maid starts.
+        bot.spawn_flash_action("setInfiniteRange", vec![FlashArg::from(true)]);
+
         bot.logs.push_debug("[Maid] Started");
         let engine = Arc::clone(self);
         let _ = std::thread::Builder::new()
@@ -427,9 +430,24 @@ impl MaidEngine {
                         self.stop(&bot);
                         break;
                     }
+                    // Immediately disengage combat & jump to current cell to drop aggro before /goto
+                    let _ = flash.call_str("CancelAutoAttack", &[]);
+                    let _ = flash.call_str("CancelTarget", &[]);
+                    if !snap.cell.is_empty() {
+                        let pad = if snap.pad.is_empty() {
+                            "Left"
+                        } else {
+                            snap.pad.as_str()
+                        };
+                        let _ = flash.call_str(
+                            "moveToCell",
+                            &[FlashArg::from(snap.cell.as_str()), FlashArg::from(pad)],
+                        );
+                        std::thread::sleep(Duration::from_millis(250));
+                    }
                     let pkt = format!("%xt%zm%cmd%1%goto%{target_player}%");
                     let _ = bot.capture.send_to_server(&pkt);
-                    std::thread::sleep(Duration::from_millis(800));
+                    std::thread::sleep(Duration::from_millis(600));
                     continue;
                 } else {
                     self.goto_fail_count.store(0, Ordering::Release);
@@ -539,6 +557,12 @@ impl MaidEngine {
                 }
             } else if !flash.call_bool("hasTarget", &[]).unwrap_or(false) {
                 let _ = flash.call_str("AttackMonster", &[FlashArg::from("*")]);
+            }
+
+            // Never spam offensive skills if no monster target is active
+            if !flash.call_bool("hasTarget", &[]).unwrap_or(false) {
+                std::thread::sleep(Duration::from_millis(cfg.skill_delay.max(80) as u64));
+                continue;
             }
 
             // 8. Aura-aware SpecialCombo for presets (CSH, AI, AM, AP)

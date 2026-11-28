@@ -41,15 +41,26 @@ pub fn handle(bot: &Arc<Bot>, cfg: &MaidConfig, parts: &[&str]) {
 
     bot.maid.reset_specials();
 
-    // Jump to target's cell/pad unless unfollowed or paused
-    if let Some(pad_val) = pad
-        && !bot.maid.is_unfollow()
-        && !bot.maid.is_on_pause()
-    {
-        bot.spawn_flash_action(
-            "moveToCell",
-            vec![FlashArg::from(cell_val), FlashArg::from(pad_val)],
-        );
+    // Immediately stop attacking and jump to target's cell/pad unless unfollowed or paused
+    if !bot.maid.is_unfollow() && !bot.maid.is_on_pause() {
+        let target_cell = cell_val.to_string();
+        let target_pad = pad.unwrap_or("Left").to_string();
+        let b = Arc::clone(bot);
+        let _ = std::thread::Builder::new()
+            .name("maid-follow-cell".into())
+            .spawn(move || {
+                if let Some(flash) = b.flash() {
+                    let _ = flash.call_str("CancelAutoAttack", &[]);
+                    let _ = flash.call_str("CancelTarget", &[]);
+                    let _ = flash.call_str(
+                        "moveToCell",
+                        &[
+                            FlashArg::from(target_cell.as_str()),
+                            FlashArg::from(target_pad.as_str()),
+                        ],
+                    );
+                }
+            });
     }
 
     // Check WhitelistMap rules
