@@ -218,6 +218,13 @@ impl BotRunner {
         self.paused.store(false, Ordering::Release);
     }
 
+    /// Disables auto-relogin in the runner configuration (e.g. when Anti-Mod detects Game Staff).
+    pub fn disable_auto_relogin(&self) {
+        let mut cfg = self.config.write();
+        cfg.auto_relogin = false;
+        cfg.auto_relogin_any = false;
+    }
+
     pub fn start(&self, bot: Arc<Bot>) {
         if self.running.swap(true, Ordering::AcqRel) {
             return;
@@ -367,7 +374,7 @@ impl BotRunner {
                     }
 
                     if !bot.is_logged_in() {
-                        if !config.auto_relogin {
+                        if !config.auto_relogin || !bot.runner.config().auto_relogin {
                             bot.logs
                                 .push_debug("[Bot] Stopped (logged out, auto-relogin disabled)");
                             running.store(false, Ordering::Release);

@@ -15,7 +15,7 @@ use crate::auto_attack::AutoAttack;
 use crate::capture::CaptureProxy;
 use crate::flash::Flash;
 use crate::gbot::BotConfig;
-use crate::handlers::{AntiCounterHandler, MaidPacketRouter, SpecialHandlerManager};
+use crate::handlers::{AntiCounterHandler, AntiModHandler, MaidPacketRouter, SpecialHandlerManager, StaffAlert};
 use crate::host::{FlashArg, FlashHost};
 use crate::log::LogBuffer;
 use crate::maid::MaidEngine;
@@ -45,6 +45,7 @@ pub struct Bot {
     pub auto_attack: Arc<AutoAttack>,
     pub maid: Arc<MaidEngine>,
     pub anti_counter: Arc<AntiCounterHandler>,
+    pub anti_mod: Arc<AntiModHandler>,
     pub special_handler: Arc<SpecialHandlerManager>,
     pub smart_combat: Mutex<commands::combat::SmartCombatState>,
     game_loaded: AtomicBool,
@@ -60,6 +61,7 @@ impl Bot {
         let state = Arc::new(GameState::default());
         let tamper = Arc::new(TamperEngine::default());
         let anti_counter = Arc::new(AntiCounterHandler::new(logs.clone()));
+        let anti_mod = Arc::new(AntiModHandler::new(logs.clone()));
         let special_handler = Arc::new(SpecialHandlerManager::new(logs.clone()));
         let maid_router = Arc::new(MaidPacketRouter::default());
 
@@ -68,6 +70,7 @@ impl Bot {
             logs.clone(),
         )));
         capture.add_interceptor(anti_counter.clone());
+        capture.add_interceptor(anti_mod.clone());
         capture.add_interceptor(special_handler.clone());
         capture.add_interceptor(maid_router.clone());
         capture.add_interceptor(tamper.clone());
@@ -85,6 +88,7 @@ impl Bot {
             auto_attack: Arc::new(AutoAttack::default()),
             maid: Arc::new(MaidEngine::default()),
             anti_counter: anti_counter.clone(),
+            anti_mod: anti_mod.clone(),
             special_handler: special_handler.clone(),
             smart_combat: Mutex::new(commands::combat::SmartCombatState::default()),
             game_loaded: AtomicBool::new(false),
@@ -96,16 +100,57 @@ impl Bot {
         let weak_bot = Arc::downgrade(&bot);
         special_handler.attach_bot(weak_bot.clone());
         maid_router.attach_bot(weak_bot.clone());
-        anti_counter.set_on_counter_active(Arc::new(move || {
-            if let Some(b) = weak_bot.upgrade() {
-                let enabled = b.auto_attack.is_running()
-                    || b.options.get().anti_counter
-                    || (b.runner.is_running() && b.runner.config().anti_counter);
-                if enabled {
-                    b.spawn_flash_action("cancelTarget", vec![]);
+        {
+            let weak_counter = weak_bot.clone();
+            anti_counter.set_on_counter_active(Arc::new(move || {
+                if let Some(b) = weak_counter.upgrade() {
+                    let enabled = b.auto_attack.is_running()
+                        || b.options.get().anti_counter
+                        || (b.runner.is_running() && b.runner.config().anti_counter);
+                    if enabled {
+                        b.spawn_flash_action("cancelTarget", vec![]);
+                    }
                 }
-            }
-        }));
+            }));
+        }
+        {
+            let weak_mod = weak_bot.clone();
+            anti_mod.set_on_staff_detected(Arc::new(move |username, access_level, color| {
+                let Some(b) = weak_mod.upgrade() else {
+                    return;
+                };
+                let bot_running = b.runner.is_running()
+                    || b.auto_attack.is_running()
+                    || b.maid.is_running();
+                if !bot_running {
+                    return;
+                }
+                let (is_self, map) = b.read_player(|snap| {
+                    let self_match = !snap.username.trim().is_empty()
+                        && snap.username.trim().eq_ignore_ascii_case(username);
+                    (self_match, snap.map.clone())
+                });
+                if is_self {
+                    return;
+                }
+
+                b.logs.push_debug(format!(
+                    "[AntiMod] Game Staff detected ({username}, Access {access_level}/{color}) while botting — stopping bot, disabling auto-relogin & logging out!"
+                ));
+                b.runner.disable_auto_relogin();
+                b.stop_bot();
+                b.auto_attack.stop(b.clone());
+                b.maid.stop(&b);
+                b.spawn_flash_action("Logout", vec![]);
+                b.anti_mod.set_alert(StaffAlert {
+                    username: username.to_string(),
+                    access_level,
+                    color,
+                    map,
+                    timestamp: chrono::Local::now().format("%H:%M:%S").to_string(),
+                });
+            }));
+        }
 
         bot
     }

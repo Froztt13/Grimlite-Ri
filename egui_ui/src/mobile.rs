@@ -162,6 +162,7 @@ impl GrimliteUi {
         if self.show_logs {
             self.show_logs_window(ctx);
         }
+        self.show_staff_alert_window(ctx);
 
         if let Some(ref perf) = self.mobile_perf
             && perf.show_fps()

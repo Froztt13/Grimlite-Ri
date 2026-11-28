@@ -1033,6 +1033,87 @@ impl GrimliteUi {
         if self.show_logs {
             self.show_logs_window(ctx);
         }
+        self.show_staff_alert_window(ctx);
+    }
+
+    pub(crate) fn show_staff_alert_window(&mut self, ctx: &Context) {
+        let Some(alert) = self.bot.anti_mod.active_alert() else {
+            return;
+        };
+        let mut open = true;
+        egui::Window::new("⚠ Game Staff Detected!")
+            .id(egui::Id::new("grimlite_staff_alert_modal"))
+            .order(egui::Order::Foreground)
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+            .collapsible(false)
+            .resizable(false)
+            .fixed_size([360.0, 0.0])
+            .open(&mut open)
+            .show(ctx, |ui| {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("Game Staff / Moderator encountered while botting!")
+                        .strong()
+                        .size(13.5)
+                        .color(Color32::from_rgb(245, 110, 110)),
+                );
+                ui.add_space(8.0);
+                egui::Frame::new()
+                    .fill(theme::Palette::BG_INPUT)
+                    .stroke(egui::Stroke::new(1.0, theme::Palette::BORDER_SUBTLE))
+                    .corner_radius(egui::CornerRadius::same(6))
+                    .inner_margin(egui::Margin::same(10))
+                    .show(ui, |ui| {
+                        ui.set_min_width(ui.available_width());
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Staff:").color(theme::Palette::TEXT_MUTED));
+                            ui.label(RichText::new(&alert.username).strong().color(Color32::WHITE));
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(
+                                RichText::new("Access Level:").color(theme::Palette::TEXT_MUTED),
+                            );
+                            ui.label(
+                                RichText::new(format!("{} ({})", alert.access_level, alert.color))
+                                    .strong()
+                                    .color(theme::Palette::WARNING),
+                            );
+                        });
+                        if !alert.map.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("Map:").color(theme::Palette::TEXT_MUTED));
+                                ui.label(RichText::new(&alert.map).color(Color32::WHITE));
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(RichText::new("Time:").color(theme::Palette::TEXT_MUTED));
+                            ui.label(RichText::new(&alert.timestamp).color(Color32::WHITE));
+                        });
+                    });
+                ui.add_space(8.0);
+                ui.label(
+                    RichText::new(
+                        "Automatic safety actions executed:\n• Bot, Auto Attack & Maid stopped\n• Auto-relogin disabled\n• Account logged out",
+                    )
+                    .size(12.0)
+                    .color(theme::Palette::TEXT_MUTED),
+                );
+                ui.add_space(10.0);
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add_sized(
+                            [96.0, 28.0],
+                            egui::Button::new(RichText::new("OK").strong()),
+                        )
+                        .clicked()
+                    {
+                        self.bot.anti_mod.dismiss_alert();
+                    }
+                });
+            });
+        if !open {
+            self.bot.anti_mod.dismiss_alert();
+        }
     }
 
     fn show_about_window(&mut self, ctx: &Context) {

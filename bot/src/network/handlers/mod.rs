@@ -1,6 +1,7 @@
 //! Packet-level combat & boss mechanic handlers driven by Ruffle's `CaptureProxy`.
 
 pub mod anti_counter;
+pub mod anti_mod;
 pub mod astral_empyrean;
 pub mod colossal_vordred;
 pub mod dark_carnax;
@@ -12,6 +13,7 @@ pub mod ultra_dage;
 pub mod ultra_speaker;
 
 pub use anti_counter::AntiCounterHandler;
+pub use anti_mod::{AntiModHandler, StaffAlert};
 pub use astral_empyrean::AstralEmpyreanHandler;
 pub use colossal_vordred::ColossalVordredHandler;
 pub use dark_carnax::DarkCarnaxHandler;
