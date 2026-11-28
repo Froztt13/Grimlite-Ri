@@ -1234,6 +1234,7 @@ impl GrimliteUi {
     }
 
     fn show_options_window(&mut self, ctx: &Context) {
+        self.options.hide_players = self.bot.options.get().hide_players;
         let mut open = self.show_options;
         let mut changed = false;
         let has_mobile_perf = self.mobile_perf.is_some();
@@ -1281,9 +1282,16 @@ impl GrimliteUi {
                                 changed |= cols[1]
                                     .checkbox(&mut self.options.lag_killer, "Lag Killer")
                                     .changed();
-                                changed |= cols[1]
+                                if cols[1]
                                     .checkbox(&mut self.options.hide_players, "Hide Players")
-                                    .changed();
+                                    .changed()
+                                {
+                                    changed = true;
+                                    self.bot.spawn_flash_action(
+                                        "setHidePlayers",
+                                        vec![FlashArg::Bool(self.options.hide_players)],
+                                    );
+                                }
                                 changed |= cols[1]
                                     .checkbox(&mut self.options.disable_animations, "Disable FX / Anims")
                                     .changed();

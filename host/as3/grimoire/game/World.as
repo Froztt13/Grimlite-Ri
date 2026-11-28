@@ -85,6 +85,63 @@ package grimoire.game
 			return "[]";
 		}
 
+		public static function GetCellPlayers(username:String):String
+		{
+			try
+			{
+				var target:String = (username != null) ? username.replace(/^\s+|\s+$/g, "").toLowerCase() : "";
+				if (target.length == 0 || Root.Game.world == null || Root.Game.world.uoTree == null)
+				{
+					return Root.FalseString;
+				}
+				var myFrame:String = String(Root.Game.world.strFrame || "").toLowerCase();
+				var entry:Object = Root.Game.world.uoTree[target];
+				if (entry != null && entry.strFrame != null)
+				{
+					return String(entry.strFrame).toLowerCase() == myFrame ? Root.TrueString : Root.FalseString;
+				}
+				for each (var uo:Object in Root.Game.world.uoTree)
+				{
+					if (uo != null && uo.uoName != null && String(uo.uoName).toLowerCase() == target)
+					{
+						return String(uo.strFrame || "").toLowerCase() == myFrame ? Root.TrueString : Root.FalseString;
+					}
+				}
+			}
+			catch (e:Error) {}
+			return Root.FalseString;
+		}
+
+		public static function GetPlayerCellPad(username:String):String
+		{
+			try
+			{
+				var target:String = (username != null) ? username.replace(/^\s+|\s+$/g, "").toLowerCase() : "";
+				if (target.length > 0 && Root.Game.world != null && Root.Game.world.uoTree != null)
+				{
+					var entry:Object = Root.Game.world.uoTree[target];
+					if (entry == null)
+					{
+						for each (var uo:Object in Root.Game.world.uoTree)
+						{
+							if (uo != null && uo.uoName != null && String(uo.uoName).toLowerCase() == target)
+							{
+								entry = uo;
+								break;
+							}
+						}
+					}
+					if (entry != null && entry.strFrame != null && String(entry.strFrame).length > 0)
+					{
+						var padStr:String = (entry.strPad != null && String(entry.strPad).length > 0) ? String(entry.strPad) : "Spawn";
+						return JSON.stringify({ cell: String(entry.strFrame), pad: padStr });
+					}
+				}
+			}
+			catch (e:Error) {}
+			return "{}";
+		}
+
 		public static function RoomId():String
 		{
 			try

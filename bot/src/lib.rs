@@ -51,6 +51,7 @@ pub struct Bot {
     game_loaded: AtomicBool,
     worker_started: AtomicBool,
     inv_syncing: AtomicBool,
+    hide_players_from_game: AtomicBool,
     jump_gen: std::sync::atomic::AtomicU64,
 }
 
@@ -94,6 +95,7 @@ impl Bot {
             game_loaded: AtomicBool::new(false),
             worker_started: AtomicBool::new(false),
             inv_syncing: AtomicBool::new(false),
+            hide_players_from_game: AtomicBool::new(false),
             jump_gen: std::sync::atomic::AtomicU64::new(0),
         });
 
@@ -468,6 +470,18 @@ impl Bot {
                 }
                 None
             }
+            "hidePlayersChanged" => {
+                if let Some(raw) = args.first() {
+                    let enabled = raw.eq_ignore_ascii_case("true");
+                    let mut opts = self.options.get();
+                    if opts.hide_players != enabled {
+                        opts.hide_players = enabled;
+                        self.hide_players_from_game.store(true, Ordering::Release);
+                        self.options.set(opts);
+                    }
+                }
+                None
+            }
             "debug" => {
                 if let Some(msg) = args.first() {
                     self.logs.push_debug(msg.clone());
@@ -552,10 +566,17 @@ impl Bot {
                             .call_bool("setEnemyMagnet", &[FlashArg::Bool(desired.enemy_magnet)]);
                         let _ =
                             flash.call_bool("setLagKiller", &[FlashArg::Bool(desired.lag_killer)]);
-                        let _ = flash.call_bool(
-                            "setHidePlayers",
-                            &[FlashArg::Bool(desired.hide_players)],
-                        );
+                        let hide_from_game =
+                            bot.hide_players_from_game.swap(false, Ordering::AcqRel);
+                        let hide_changed = applied
+                            .as_ref()
+                            .is_some_and(|a| a.hide_players != desired.hide_players);
+                        if hide_changed && !hide_from_game {
+                            let _ = flash.call_bool(
+                                "setHidePlayers",
+                                &[FlashArg::Bool(desired.hide_players)],
+                            );
+                        }
                         let _ = flash.call_bool(
                             "setDisableAnimations",
                             &[FlashArg::Bool(desired.disable_animations)],

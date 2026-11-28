@@ -46,6 +46,8 @@ package grimoire
 			// World
 			bind("MapLoadComplete", World.MapLoadComplete);
 			bind("PlayersInMap", World.PlayersInMap);
+			bind("GetCellPlayers", World.GetCellPlayers);
+			bind("GetPlayerCellPad", World.GetPlayerCellPad);
 			bind("IsActionAvailable", World.IsActionAvailable);
 			bind("GetMonstersInCell", World.GetMonstersInCell);
 			bind("GetVisibleMonstersInCell", World.GetVisibleMonstersInCell);

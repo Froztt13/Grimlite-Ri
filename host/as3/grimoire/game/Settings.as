@@ -248,7 +248,7 @@ package grimoire.game
 			catch (e:Error) {}
 		}
 
-		public static function SetHidePlayers(enabled:Boolean):void
+		public static function SetHidePlayers(enabled:Boolean, flushPref:Boolean = true):void
 		{
 			try
 			{
@@ -256,14 +256,30 @@ package grimoire.game
 				{
 					return;
 				}
-				var myAv:* = Root.Game.world.myAvatar;
-				var avatars:Object = Root.Game.world.avatars;
-				for (var key:String in avatars)
+				if (Root.Game.litePreference != null && Root.Game.litePreference.data != null)
 				{
-					var av:* = avatars[key];
-					if (av != null && av !== myAv && av.pMC != null)
+					Root.Game.litePreference.data.bHidePlayers = enabled;
+					if (flushPref)
 					{
-						av.pMC.visible = !enabled;
+						Root.Game.litePreference.flush();
+					}
+				}
+				for each (var player:Object in Root.Game.world.avatars)
+				{
+					if (player != null && player.pMC != null && !player.isMyAvatar)
+					{
+						if (player.pMC.mcChar != null)
+						{
+							player.pMC.mcChar.visible = !enabled;
+						}
+						if (player.pMC.pname != null)
+						{
+							player.pMC.pname.visible = true;
+						}
+						if (player.pMC.shadow != null)
+						{
+							player.pMC.shadow.visible = true;
+						}
 					}
 				}
 			}

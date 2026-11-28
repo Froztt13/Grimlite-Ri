@@ -409,7 +409,7 @@ impl MaidEngine {
                 continue;
             }
 
-            // 1. Follow target player (every ~1.5s when not unfollowed / paused)
+            // 1. Follow target player (map + cell chase, matching `MaidRemake.cs`)
             let target_player = cfg.target.trim().to_string();
             let my_name = snap.username.trim().to_string();
             if !target_player.is_empty()
@@ -430,20 +430,22 @@ impl MaidEngine {
                         self.stop(&bot);
                         break;
                     }
-                    // Immediately disengage combat & jump to current cell to drop aggro before /goto
-                    let _ = flash.call_str("CancelAutoAttack", &[]);
-                    let _ = flash.call_str("CancelTarget", &[]);
-                    if !snap.cell.is_empty() {
-                        let pad = if snap.pad.is_empty() {
-                            "Left"
-                        } else {
-                            snap.pad.as_str()
-                        };
-                        let _ = flash.call_str(
-                            "moveToCell",
-                            &[FlashArg::from(snap.cell.as_str()), FlashArg::from(pad)],
-                        );
-                        std::thread::sleep(Duration::from_millis(250));
+                    // Match `MaidRemake.cs::gotoTarget`: only exit combat if currently in combat
+                    if snap.state == 2 {
+                        let _ = flash.call_str("CancelAutoAttack", &[]);
+                        let _ = flash.call_str("CancelTarget", &[]);
+                        if !snap.cell.is_empty() {
+                            let pad = if snap.pad.is_empty() {
+                                "Spawn"
+                            } else {
+                                snap.pad.as_str()
+                            };
+                            let _ = flash.call_str(
+                                "moveToCell",
+                                &[FlashArg::from(snap.cell.as_str()), FlashArg::from(pad)],
+                            );
+                            std::thread::sleep(Duration::from_millis(250));
+                        }
                     }
                     let pkt = format!("%xt%zm%cmd%1%goto%{target_player}%");
                     let _ = bot.capture.send_to_server(&pkt);
@@ -451,6 +453,24 @@ impl MaidEngine {
                     continue;
                 } else {
                     self.goto_fail_count.store(0, Ordering::Release);
+                    // Match `MaidRemake.cs::chaseTargetCell`: if master is in the same room but a
+                    // different cell (e.g. idle when Maid started), jump to master's cell once.
+                    if !is_player_in_my_cell(&flash, &target_player) {
+                        if let Some((t_cell, t_pad)) = get_target_cell_pad(&flash, &target_player)
+                            && !t_cell.eq_ignore_ascii_case(&snap.cell)
+                        {
+                            if snap.state == 2 {
+                                let _ = flash.call_str("CancelAutoAttack", &[]);
+                                let _ = flash.call_str("CancelTarget", &[]);
+                            }
+                            let _ = flash.call_str(
+                                "moveToCell",
+                                &[FlashArg::from(t_cell.as_str()), FlashArg::from(t_pad.as_str())],
+                            );
+                            std::thread::sleep(Duration::from_millis(800));
+                            continue;
+                        }
+                    }
                 }
             }
 
@@ -677,6 +697,32 @@ fn is_player_in_map(flash: &Flash, username: &str) -> bool {
                 .any(|p| p.trim().eq_ignore_ascii_case(username.trim()))
         })
         .unwrap_or(false)
+}
+
+fn is_player_in_my_cell(flash: &Flash, username: &str) -> bool {
+    flash
+        .call_bool("GetCellPlayers", &[FlashArg::from(username.trim())])
+        .unwrap_or(true)
+}
+
+fn get_target_cell_pad(flash: &Flash, username: &str) -> Option<(String, String)> {
+    #[derive(serde::Deserialize)]
+    struct CellPad {
+        cell: String,
+        pad: String,
+    }
+    let cp = flash
+        .call_json::<CellPad>("GetPlayerCellPad", &[FlashArg::from(username.trim())])
+        .ok()?;
+    if cp.cell.trim().is_empty() {
+        return None;
+    }
+    let pad = if cp.pad.trim().is_empty() {
+        "Spawn".to_string()
+    } else {
+        cp.pad
+    };
+    Some((cp.cell, pad))
 }
 
 fn is_skill_ready(flash: &Flash, idx: &str) -> bool {

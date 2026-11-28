@@ -112,10 +112,10 @@ pub fn accept_quest_direct(bot: &Bot, flash: &Flash, running: &AtomicBool, quest
     }
 }
 
-/// Shared SSOT quest turn-in matching Grimlite-Li `CmdCompleteQuest.cs`:
+/// Shared SSOT quest turn-in:
 /// 1. Verify `canCompleteQuest` before attempting turn-in.
-/// 2. Optionally exit combat if `config.exit_combat_before_quest` is enabled.
-/// 3. Call `completeQuest` and respect the 1100ms server cooldown minus `bot_delay`.
+/// 2. Call `completeQuest` directly in-combat (AQW supports accepting and turning in quests without
+///    leaving combat) and respect the 1100ms server cooldown minus `bot_delay`.
 pub fn complete_quest(ctx: &CommandContext<'_>, quest_id: i32, item_id: i32, qty: i32) {
     complete_quest_direct(
         ctx.bot,
@@ -137,7 +137,7 @@ pub fn complete_quest_direct(
     quest_id: i32,
     item_id: i32,
     qty: i32,
-    exit_combat_before_quest: bool,
+    _exit_combat_before_quest: bool,
     bot_delay: u64,
 ) {
     if quest_id <= 0 || !running.load(Ordering::Acquire) {
@@ -149,24 +149,6 @@ pub fn complete_quest_direct(
         .unwrap_or(false)
     {
         return;
-    }
-
-    if exit_combat_before_quest {
-        let _ = flash.call_str("CancelAutoAttack", &[]);
-        let _ = flash.call_str("CancelTarget", &[]);
-        let snap = bot.player_snapshot();
-        if !snap.cell.is_empty() {
-            let pad = if snap.pad.is_empty() {
-                "Left"
-            } else {
-                snap.pad.as_str()
-            };
-            let _ = flash.call_str(
-                "moveToCell",
-                &[FlashArg::from(snap.cell.as_str()), FlashArg::from(pad)],
-            );
-            sleep_interruptible(running, 250);
-        }
     }
 
     let prev_provoke = bot.options.get().provoke_monsters;

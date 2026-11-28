@@ -51,9 +51,11 @@ impl Interceptor for MaidPacketRouter {
             let cmd = parts.get(2).copied().unwrap_or_default();
             match cmd {
                 "uotls" => {
-                    cell_jumper::handle(&bot, &cfg, &parts);
-                    if cfg.copy_walk {
-                        copy_walk::handle(&bot, &cfg, &parts);
+                    if !bot.maid.is_unfollow() {
+                        cell_jumper::handle(&bot, &cfg, &parts);
+                        if cfg.copy_walk && !bot.maid.is_on_pause() {
+                            copy_walk::handle(&bot, &cfg, &parts);
+                        }
                     }
                 }
                 "exitArea" => {
@@ -72,25 +74,27 @@ impl Interceptor for MaidPacketRouter {
                             .name("maid-follow-map".into())
                             .spawn(move || {
                                 if let Some(flash) = b.flash() {
-                                    let _ = flash.call_str("CancelAutoAttack", &[]);
-                                    let _ = flash.call_str("CancelTarget", &[]);
                                     let snap = b.player_snapshot();
-                                    if !snap.cell.is_empty() {
-                                        let pad = if snap.pad.is_empty() {
-                                            "Left"
-                                        } else {
-                                            snap.pad.as_str()
-                                        };
-                                        let _ = flash.call_str(
-                                            "moveToCell",
-                                            &[
-                                                crate::host::FlashArg::from(snap.cell.as_str()),
-                                                crate::host::FlashArg::from(pad),
-                                            ],
-                                        );
+                                    if snap.state == 2 {
+                                        let _ = flash.call_str("CancelAutoAttack", &[]);
+                                        let _ = flash.call_str("CancelTarget", &[]);
+                                        if !snap.cell.is_empty() {
+                                            let pad = if snap.pad.is_empty() {
+                                                "Spawn"
+                                            } else {
+                                                snap.pad.as_str()
+                                            };
+                                            let _ = flash.call_str(
+                                                "moveToCell",
+                                                &[
+                                                    crate::host::FlashArg::from(snap.cell.as_str()),
+                                                    crate::host::FlashArg::from(pad),
+                                                ],
+                                            );
+                                            std::thread::sleep(std::time::Duration::from_millis(250));
+                                        }
                                     }
                                 }
-                                std::thread::sleep(std::time::Duration::from_millis(250));
                                 let pkt = format!("%xt%zm%cmd%1%goto%{target_name}%");
                                 let _ = b.capture.send_to_server(&pkt);
                             });

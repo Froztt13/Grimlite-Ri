@@ -48,7 +48,8 @@ public class Main extends MovieClip {
     private var callbacks:Array = [];
 
     private var optDisableAnimations:Boolean = false;
-    private var optHidePlayers:Boolean = false;
+    private var hasReportedHidePlayers:Boolean = false;
+    private var lastReportedHidePlayers:Boolean = false;
     private var optSkipCutscenes:Boolean = false;
     private var optEnemyMagnet:Boolean = false;
     private var optWalkSpeedEnabled:Boolean = false;
@@ -309,6 +310,7 @@ public class Main extends MovieClip {
         if (stateFrameCounter >= 12) {
             stateFrameCounter = 0;
             pushPlayerStateIfChanged();
+            syncHidePlayersFromGame();
         }
         if (game == null || game.world == null) {
             return;
@@ -324,9 +326,6 @@ public class Main extends MovieClip {
             }
             if (optEnemyMagnet) {
                 Settings.SetEnemyMagnet();
-            }
-            if (optHidePlayers) {
-                Settings.SetHidePlayers(true);
             }
             if (optDisableAnimations) {
                 Settings.DisableAnimationsFrame();
@@ -576,9 +575,25 @@ public class Main extends MovieClip {
         return "true";
     }
 
+    private function syncHidePlayersFromGame():void {
+        try {
+            if (game == null || game.litePreference == null || game.litePreference.data == null) {
+                return;
+            }
+            var cur:Boolean = Boolean(game.litePreference.data.bHidePlayers);
+            if (!hasReportedHidePlayers || cur != lastReportedHidePlayers) {
+                hasReportedHidePlayers = true;
+                lastReportedHidePlayers = cur;
+                callHost("hidePlayersChanged", [cur ? "true" : "false"]);
+            }
+        } catch (e:Error) {}
+    }
+
     private function setHidePlayers(on:* = true):String {
-        optHidePlayers = (on == true || on == "true");
-        Settings.SetHidePlayers(optHidePlayers);
+        var enabled:Boolean = (on == true || on == "true");
+        hasReportedHidePlayers = true;
+        lastReportedHidePlayers = enabled;
+        Settings.SetHidePlayers(enabled, true);
         return "true";
     }
 
