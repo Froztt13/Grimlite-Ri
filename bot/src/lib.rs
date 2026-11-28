@@ -329,10 +329,12 @@ impl Bot {
                                 }
                             }
                         }
-                        let _ = flash.call_bool(
-                            "setInfiniteRange",
-                            &[FlashArg::Bool(desired.infinite_range)],
-                        );
+                        if desired.infinite_range {
+                            let _ = flash.call_bool(
+                                "setInfiniteRange",
+                                &[FlashArg::Bool(true)],
+                            );
+                        }
                         let _ = flash
                             .call_bool("setEnemyMagnet", &[FlashArg::Bool(desired.enemy_magnet)]);
                         let _ =

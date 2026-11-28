@@ -23,9 +23,12 @@ package grimoire.game
 
 		public static function SetInfiniteRange(enabled:Boolean = true):void
 		{
+			if (!enabled)
+			{
+				return;
+			}
 			try
 			{
-				var range:int = enabled ? 20000 : 300;
 				var active:Array = Root.Game.world.actions.active;
 				if (active != null)
 				{
@@ -33,7 +36,7 @@ package grimoire.game
 					{
 						if (active[i] != null)
 						{
-							active[i].range = range;
+							active[i].range = 20000;
 						}
 					}
 				}
