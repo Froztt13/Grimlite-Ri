@@ -174,7 +174,31 @@ impl Bot {
     }
 
     pub fn stop_bot(&self) {
+        let was_running = self.runner.is_running();
         self.runner.stop();
+        if was_running && self.is_logged_in() {
+            let snap = self.state.snapshot();
+            let cell = snap.cell;
+            let pad = if snap.pad.is_empty() {
+                "Left".to_string()
+            } else {
+                snap.pad
+            };
+            if let Some(flash) = self.flash() {
+                let _ = std::thread::Builder::new()
+                    .name("grimlite-stop-disengage".into())
+                    .spawn(move || {
+                        let _ = flash.call_str("CancelAutoAttack", &[]);
+                        let _ = flash.call_str("CancelTarget", &[]);
+                        if !cell.is_empty() {
+                            let _ = flash.call_str(
+                                "Jump",
+                                &[FlashArg::from(cell.as_str()), FlashArg::from(pad.as_str())],
+                            );
+                        }
+                    });
+            }
+        }
     }
 
     pub fn is_logged_in(&self) -> bool {
@@ -194,6 +218,10 @@ impl Bot {
 
     pub fn is_game_loaded(&self) -> bool {
         self.game_loaded.load(Ordering::Acquire)
+    }
+
+    pub fn set_game_loaded(&self, loaded: bool) {
+        self.game_loaded.store(loaded, Ordering::Release);
     }
 
     pub fn player_snapshot(&self) -> PlayerSnapshot {
