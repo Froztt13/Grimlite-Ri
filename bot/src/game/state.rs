@@ -648,21 +648,66 @@ impl StatePacketInterceptor {
                 if let Some(items) = o.get("items").and_then(|i| i.as_object()) {
                     let mut inv = self.state.inventory.write();
                     let mut temp = self.state.temp_inventory.write();
-                    for item in items.values() {
-                        if let Some(mut si) = parse_simple_item(item) {
-                            let is_temp = json_i64(item.get("bTemp")).unwrap_or(0) == 1;
-                            if let Some(now) = json_i64(item.get("iQtyNow")) {
-                                si.qty = now as i32;
-                            }
-                            let target = if is_temp { &mut *temp } else { &mut *inv };
-                            if let Some(existing) = target.iter_mut().find(|x| x.id == si.id) {
-                                existing.qty = si.qty;
-                                if !si.name.is_empty() {
-                                    existing.name = si.name;
-                                }
+                    for (key, item) in items {
+                        let Some(id) = json_i64(item.get("ItemID"))
+                            .or_else(|| key.trim().parse::<i64>().ok())
+                            .map(|v| v as i32)
+                        else {
+                            continue;
+                        };
+                        let is_temp = json_bool(item.get("bTemp"))
+                            || (!inv.iter().any(|x| x.id == id)
+                                && temp.iter().any(|x| x.id == id));
+                        let qty_now = json_i64(item.get("iQtyNow")).map(|v| v as i32);
+                        let delta_qty = json_i64(item.get("iQty")).unwrap_or(1) as i32;
+                        let target = if is_temp { &mut *temp } else { &mut *inv };
+
+                        if let Some(pos) = target.iter().position(|x| x.id == id) {
+                            let existing = &mut target[pos];
+                            if let Some(now) = qty_now {
+                                existing.qty = now;
                             } else {
-                                target.push(si);
+                                existing.qty = existing.qty.saturating_add(delta_qty);
                             }
+                            if let Some(name) = item.get("sName").and_then(|s| s.as_str())
+                                && !name.is_empty()
+                            {
+                                existing.name = name.to_string();
+                            }
+                            if let Some(cid) = json_i64(item.get("CharItemID"))
+                                && cid > 0
+                            {
+                                existing.char_item_id = cid as i32;
+                            }
+                            if existing.qty <= 0 {
+                                target.remove(pos);
+                            }
+                        } else {
+                            let final_qty = qty_now.unwrap_or(delta_qty);
+                            if final_qty <= 0 {
+                                continue;
+                            }
+                            let mut si = parse_simple_item(item).unwrap_or_else(|| SimpleItem {
+                                id,
+                                char_item_id: json_i64(item.get("CharItemID")).unwrap_or(0) as i32,
+                                name: item
+                                    .get("sName")
+                                    .and_then(|s| s.as_str())
+                                    .filter(|s| !s.is_empty())
+                                    .map(str::to_string)
+                                    .unwrap_or_else(|| format!("Item #{id}")),
+                                qty: final_qty,
+                                category: item
+                                    .get("sType")
+                                    .and_then(|s| s.as_str())
+                                    .unwrap_or("")
+                                    .to_string(),
+                                is_ac: json_bool(item.get("bCoins")),
+                                equipped: json_bool(item.get("bEquip"))
+                                    || json_bool(item.get("bEquipped")),
+                            });
+                            si.qty = final_qty;
+                            target.push(si);
                         }
                     }
                 }
@@ -784,7 +829,56 @@ impl StatePacketInterceptor {
                     }
                 }
             }
-            "ccqr" | "abandonQuest" => {
+            "ccqr" => {
+                if let Some(qid) = json_i64(o.get("QuestID")).map(|v| v as i32) {
+                    let ok = json_i64(o.get("bSuccess")).unwrap_or(1) != 0;
+                    let turnins = json_i64(o.get("iQty")).unwrap_or(1).max(1) as i32;
+                    let (qname, reqs) = {
+                        let mut quests = self.state.quests.write();
+                        if let Some(q) = quests.get_mut(&qid) {
+                            q.accepted = false;
+                            (
+                                q.name.clone(),
+                                if ok { q.reqs.clone() } else { Vec::new() },
+                            )
+                        } else {
+                            (String::new(), Vec::new())
+                        }
+                    };
+                    if ok {
+                        let label = if qname.is_empty() {
+                            format!("[{qid}]")
+                        } else {
+                            format!("[{qid}] {qname}")
+                        };
+                        if turnins > 1 {
+                            self.logs
+                                .push_debug(format!("[Quest] Turned in {label} (x{turnins})"));
+                        } else {
+                            self.logs.push_debug(format!("[Quest] Turned in {label}"));
+                        }
+                    }
+                    if ok && !reqs.is_empty() {
+                        let mut inv = self.state.inventory.write();
+                        let mut temp = self.state.temp_inventory.write();
+                        for req in &reqs {
+                            let consume = req.required.saturating_mul(turnins);
+                            let target = if req.is_temp { &mut *temp } else { &mut *inv };
+                            if let Some(pos) = target.iter().position(|x| {
+                                (req.item_id > 0 && x.id == req.item_id)
+                                    || (!req.name.is_empty()
+                                        && x.name.eq_ignore_ascii_case(&req.name))
+                            }) {
+                                target[pos].qty -= consume;
+                                if target[pos].qty <= 0 {
+                                    target.remove(pos);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            "abandonQuest" => {
                 if let Some(qid) = json_i64(o.get("QuestID")).map(|v| v as i32) {
                     if let Some(q) = self.state.quests.write().get_mut(&qid) {
                         q.accepted = false;
@@ -859,8 +953,61 @@ impl StatePacketInterceptor {
                 }
             }
             "getDrop" => {
-                if let Some(id) = o.get("ItemID").and_then(|v| v.as_i64()) {
-                    self.state.drops.write().remove(&(id as i32));
+                if let Some(id) = json_i64(o.get("ItemID")).map(|v| v as i32) {
+                    let success = json_i64(o.get("bSuccess")).unwrap_or(1) != 0;
+                    let removed_drop = self.state.drops.write().remove(&id);
+                    if success {
+                        let to_bank = json_bool(o.get("bBank"));
+                        let qty_now = json_i64(o.get("iQtyNow")).map(|v| v as i32);
+                        let delta_qty = json_i64(o.get("iQty"))
+                            .map(|v| v as i32)
+                            .or_else(|| removed_drop.as_ref().map(|d| d.qty))
+                            .unwrap_or(1);
+                        let char_item_id = json_i64(o.get("CharItemID")).unwrap_or(0) as i32;
+
+                        let mut target = if to_bank {
+                            self.state.bank.write()
+                        } else {
+                            self.state.inventory.write()
+                        };
+                        if let Some(existing) = target.iter_mut().find(|x| x.id == id) {
+                            if let Some(now) = qty_now {
+                                existing.qty = now;
+                            } else {
+                                existing.qty = existing.qty.saturating_add(delta_qty);
+                            }
+                            if char_item_id > 0 {
+                                existing.char_item_id = char_item_id;
+                            }
+                        } else {
+                            let final_qty = qty_now.unwrap_or(delta_qty).max(1);
+                            let (name, category, is_ac) = if let Some(d) = removed_drop {
+                                (d.name, d.category, d.is_ac)
+                            } else {
+                                (
+                                    o.get("sName")
+                                        .and_then(|s| s.as_str())
+                                        .filter(|s| !s.is_empty())
+                                        .map(str::to_string)
+                                        .unwrap_or_else(|| format!("Item #{id}")),
+                                    o.get("sType")
+                                        .and_then(|s| s.as_str())
+                                        .unwrap_or("")
+                                        .to_string(),
+                                    json_bool(o.get("bCoins")),
+                                )
+                            };
+                            target.push(SimpleItem {
+                                id,
+                                char_item_id,
+                                name,
+                                qty: final_qty,
+                                category,
+                                is_ac,
+                                equipped: false,
+                            });
+                        }
+                    }
                 }
             }
             "ct" => {
@@ -1002,7 +1149,7 @@ fn json_bool(v: Option<&serde_json::Value>) -> bool {
     }
 }
 
-fn parse_simple_item(v: &serde_json::Value) -> Option<SimpleItem> {
+pub fn parse_simple_item(v: &serde_json::Value) -> Option<SimpleItem> {
     let id = json_i64(v.get("ItemID"))? as i32;
     let char_item_id = json_i64(v.get("CharItemID")).unwrap_or(0) as i32;
     let name = v.get("sName").and_then(|x| x.as_str())?.to_string();
@@ -1050,5 +1197,27 @@ mod tests {
         assert_eq!(drops.len(), 1);
         assert_eq!(drops[0].name, "Diamond of Nulgath");
         assert!(drops[0].is_ac);
+
+        // Accepting the drop via getDrop adds it to inventory
+        let mut get_drop_msg = MessageInfo::new(
+            r#"{"t":"xt","b":{"r":-1,"o":{"cmd":"getDrop","ItemID":42,"bSuccess":1,"iQty":2,"CharItemID":999}}}"#,
+        );
+        interceptor.intercept(&mut get_drop_msg, false);
+        assert!(state.drop_list().is_empty());
+        assert_eq!(state.inventory_list()[0].qty, 2);
+
+        // Subsequent addItems without sName (delta iQty) increments existing inventory item
+        let mut delta_msg = MessageInfo::new(
+            r#"{"t":"xt","b":{"r":-1,"o":{"cmd":"addItems","items":{"42":{"ItemID":42,"iQty":3}}}}}"#,
+        );
+        interceptor.intercept(&mut delta_msg, false);
+        assert_eq!(state.inventory_list()[0].qty, 5);
+
+        // Subsequent addItems without sName (absolute iQtyNow) sets exact qty
+        let mut abs_msg = MessageInfo::new(
+            r#"{"t":"xt","b":{"r":-1,"o":{"cmd":"addItems","items":{"42":{"ItemID":42,"iQty":1,"iQtyNow":8}}}}}"#,
+        );
+        interceptor.intercept(&mut abs_msg, false);
+        assert_eq!(state.inventory_list()[0].qty, 8);
     }
 }

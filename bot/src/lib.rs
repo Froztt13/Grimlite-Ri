@@ -48,6 +48,7 @@ pub struct Bot {
     pub special_handler: Arc<SpecialHandlerManager>,
     game_loaded: AtomicBool,
     worker_started: AtomicBool,
+    inv_syncing: AtomicBool,
     jump_gen: std::sync::atomic::AtomicU64,
 }
 
@@ -86,6 +87,7 @@ impl Bot {
             special_handler: special_handler.clone(),
             game_loaded: AtomicBool::new(false),
             worker_started: AtomicBool::new(false),
+            inv_syncing: AtomicBool::new(false),
             jump_gen: std::sync::atomic::AtomicU64::new(0),
         });
 
@@ -117,6 +119,51 @@ impl Bot {
                         bot.logs.push_debug(format!("[Action {name}] {e}"));
                     }
                 }
+            });
+    }
+
+    /// Queries `world.myAvatar.items` and `world.myAvatar.tempitems` from Flash in the background
+    /// so Headless Inventory and Quest progress bars always stay 100% synced with real game state.
+    pub fn refresh_inventory_from_flash(self: &Arc<Self>) {
+        if self.inv_syncing.swap(true, Ordering::AcqRel) {
+            return;
+        }
+        let bot = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name("grimlite-inv-sync".into())
+            .spawn(move || {
+                if let Some(flash) = bot.flash() {
+                    if let Ok(items) = flash.call_json::<Vec<serde_json::Value>>(
+                        "getGameObject",
+                        &[FlashArg::from("world.myAvatar.items")],
+                    ) {
+                        let eq_set = bot.state.equipped_ids.read();
+                        let parsed: Vec<state::SimpleItem> = items
+                            .iter()
+                            .filter_map(state::parse_simple_item)
+                            .map(|mut it| {
+                                if eq_set.contains(&it.id) {
+                                    it.equipped = true;
+                                }
+                                it
+                            })
+                            .collect();
+                        if !parsed.is_empty() {
+                            *bot.state.inventory.write() = parsed;
+                        }
+                    }
+                    if let Ok(temps) = flash.call_json::<Vec<serde_json::Value>>(
+                        "getGameObject",
+                        &[FlashArg::from("world.myAvatar.tempitems")],
+                    ) {
+                        let parsed: Vec<state::SimpleItem> = temps
+                            .iter()
+                            .filter_map(state::parse_simple_item)
+                            .collect();
+                        *bot.state.temp_inventory.write() = parsed;
+                    }
+                }
+                bot.inv_syncing.store(false, Ordering::Release);
             });
     }
 
