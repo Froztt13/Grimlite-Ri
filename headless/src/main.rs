@@ -37,7 +37,46 @@ const SERVERS: &[&str] = &[
 const PACKET_LOG_CAPACITY: usize = 500;
 const APP_ICON_RGBA: &[u8] = include_bytes!("../../app/assets/grimlite-icon-64.rgba");
 
+fn install_crash_logger() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let log_path = grimlite_bot::options::app_data_dir().join("headless-crash.log");
+        if let Some(parent) = log_path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        let thread = std::thread::current()
+            .name()
+            .unwrap_or("unnamed")
+            .to_string();
+        let loc = info
+            .location()
+            .map(|l| format!("{}:{}:{}", l.file(), l.line(), l.column()))
+            .unwrap_or_else(|| "unknown".to_string());
+        let msg = if let Some(s) = info.payload().downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = info.payload().downcast_ref::<String>() {
+            s.clone()
+        } else {
+            "non-string panic payload".to_string()
+        };
+        let bt = std::backtrace::Backtrace::force_capture();
+        let entry = format!(
+            "=== Grimlite Ri Headless Panic ===\nThread: {thread}\nLocation: {loc}\nMessage: {msg}\nBacktrace:\n{bt}\n\n"
+        );
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+        {
+            use std::io::Write;
+            let _ = f.write_all(entry.as_bytes());
+        }
+        prev(info);
+    }));
+}
+
 fn main() -> eframe::Result {
+    install_crash_logger();
     let icon = egui::IconData {
         rgba: APP_ICON_RGBA.to_vec(),
         width: 64,

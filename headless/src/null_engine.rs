@@ -22,14 +22,29 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 use url::Url;
 
 const STAGE_W: u32 = 958;
 const STAGE_H: u32 = 550;
+/// 8 MB stack for Ruffle AVM2 execution on non-main threads (prevents 512KB macOS / 1MB Windows stack overflows).
+const RUFFLE_THREAD_STACK_SIZE: usize = 8 * 1024 * 1024;
+
+/// Single shared lightweight Tokio runtime for all headless tabs (avoids spawning N * CPU-cores threads).
+fn shared_tokio_runtime() -> &'static tokio::runtime::Runtime {
+    static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RT.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(2)
+            .thread_name("grimlite-headless-io")
+            .enable_all()
+            .build()
+            .expect("shared headless tokio runtime")
+    })
+}
 
 enum EngineEvent {
     TaskPoll(async_task::Runnable),
@@ -101,15 +116,12 @@ impl HeadlessEngine {
         let bot_engine = bot.clone();
 
         let _ = std::thread::Builder::new()
-            .name("grimlite-null-ruffle".into())
+            .name(format!("grimlite-null-ruffle-{}", sanitize_dir_name(&username)))
+            .stack_size(RUFFLE_THREAD_STACK_SIZE)
             .spawn(move || {
                 ruffle_core::set_show_all_apis(true);
                 ruffle_core::set_forgiving_removal(true);
-                let rt = tokio::runtime::Builder::new_multi_thread()
-                    .enable_all()
-                    .build()
-                    .expect("tokio runtime");
-                let _guard = rt.enter();
+                let _guard = shared_tokio_runtime().enter();
 
                 bot_engine.set_game_loaded(false);
                 bot_engine.state.reset_session();
@@ -153,7 +165,9 @@ impl HeadlessEngine {
                     scale_factor: 1.0,
                 });
 
-                let storage_dir = data_dir().join("shared_objects");
+                let storage_dir = data_dir()
+                    .join("shared_objects")
+                    .join(sanitize_dir_name(&username));
                 let _ = std::fs::create_dir_all(&storage_dir);
 
                 let player = PlayerBuilder::new()
@@ -329,6 +343,25 @@ fn spawn_auto_login(
                 std::thread::sleep(Duration::from_millis(400));
             }
         });
+}
+
+fn sanitize_dir_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .trim()
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if cleaned.is_empty() {
+        "default".to_string()
+    } else {
+        cleaned
+    }
 }
 
 fn data_dir() -> PathBuf {
