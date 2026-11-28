@@ -11,6 +11,7 @@ use grimlite_bot::capture::InterceptedPacket;
 use grimlite_bot::host::FlashArg;
 use grimlite_bot::state::{PlayerSnapshot, SimpleItem};
 use grimlite_egui::bot_managers::BotManagerWindow;
+use grimlite_egui::maid::MaidWindow;
 use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
@@ -160,12 +161,15 @@ impl ItemTypeFilter {
 
 struct Session {
     user: String,
+    password: String,
     server: String,
     started_at: Instant,
     bot: Arc<Bot>,
     engine: Option<HeadlessEngine>,
     bot_manager: BotManagerWindow,
     show_bot_manager: bool,
+    maid: MaidWindow,
+    last_active_cmd_idx: Option<usize>,
     // Next-packet filtered log (already-written packets are never retroactively filtered)
     last_pkt_ver: u64,
     last_pkt_seq: u64,
@@ -175,6 +179,8 @@ struct Session {
 impl Session {
     fn new(user: String, password: String, server: String) -> Self {
         let bot = Bot::new();
+        bot.capture.set_logging_server(true);
+        bot.capture.set_logging_client(true);
         let bot_manager = BotManagerWindow::new(
             bot.clone(),
             Some(Box::new(|| {
@@ -189,20 +195,37 @@ impl Session {
                     .save_file()
             })),
         );
+        let maid = MaidWindow::new(
+            bot.clone(),
+            Some(Box::new(|| {
+                rfd::FileDialog::new()
+                    .add_filter("Maid Config", &["json"])
+                    .pick_file()
+            })),
+            Some(Box::new(|| {
+                rfd::FileDialog::new()
+                    .add_filter("Maid Config", &["json"])
+                    .set_file_name("maid.json")
+                    .save_file()
+            })),
+        );
         let engine = Some(HeadlessEngine::spawn(
             bot.clone(),
             user.clone(),
-            password,
+            password.clone(),
             server.clone(),
         ));
         Self {
             user,
+            password,
             server,
             started_at: Instant::now(),
             bot,
             engine,
             bot_manager,
             show_bot_manager: false,
+            maid,
+            last_active_cmd_idx: None,
             last_pkt_ver: 0,
             last_pkt_seq: 0,
             packet_log: VecDeque::with_capacity(256),
@@ -217,14 +240,33 @@ impl Session {
 
     fn stop(&mut self) {
         self.bot.stop_bot();
+        self.bot.maid.stop(&self.bot);
         if let Some(eng) = self.engine.take() {
             eng.stop();
         }
+        self.bot.state.reset_session();
+    }
+
+    fn reconnect(&mut self) {
+        self.stop();
+        self.started_at = Instant::now();
+        self.bot.logs.push_debug(format!(
+            "[Headless] Reconnecting {} to {}...",
+            self.user, self.server
+        ));
+        self.engine = Some(HeadlessEngine::spawn(
+            self.bot.clone(),
+            self.user.clone(),
+            self.password.clone(),
+            self.server.clone(),
+        ));
     }
 
     /// Appends only newly arrived packets that match the current next-packet filters.
     /// Packets already written to `packet_log` are kept untouched.
     fn poll_next_packets(&mut self, allow_server: bool, allow_client: bool, filter_text: &str) {
+        self.bot.capture.set_logging_server(allow_server);
+        self.bot.capture.set_logging_client(allow_client);
         let ver = self.bot.capture.version();
         if ver == self.last_pkt_ver {
             return;
@@ -486,21 +528,52 @@ impl eframe::App for HeadlessApp {
                     let ready = running && is_auth_ready(&snap);
 
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui
-                            .add_enabled(
-                                running,
-                                egui::Button::new(
-                                    RichText::new("Stop Account")
-                                        .color(Color32::from_rgb(252, 165, 165)),
-                                ),
+                        if running {
+                            if grimlite_egui::theme::danger_button(
+                                ui,
+                                "Stop Account",
+                                true,
+                                [94.0, 22.0],
                             )
                             .on_hover_text("Disconnect and stop the headless engine for this tab")
                             .clicked()
+                            {
+                                sess.stop();
+                            }
+                        } else if grimlite_egui::theme::toggle_button(
+                            ui,
+                            true,
+                            true,
+                            "↻ Reconnect",
+                            "↻ Reconnect",
+                            Some([94.0, 22.0]),
+                        )
+                        .on_hover_text("Reconnect this headless account")
+                        .clicked()
                         {
-                            sess.stop();
+                            sess.reconnect();
                         }
 
                         if ready {
+                            ui.separator();
+                            ui.scope(|ui| {
+                                ui.spacing_mut().item_spacing.x = 2.0;
+                                if ui
+                                    .selectable_label(sess.maid.open, "Maid")
+                                    .on_hover_text("Open Maid window")
+                                    .clicked()
+                                {
+                                    sess.maid.open = !sess.maid.open;
+                                }
+                                let mut maid_on = sess.bot.maid.is_running();
+                                if ui
+                                    .checkbox(&mut maid_on, "")
+                                    .on_hover_text("Start / Stop Maid")
+                                    .changed()
+                                {
+                                    sess.bot.maid.toggle(sess.bot.clone());
+                                }
+                            });
                             ui.separator();
                             if ui
                                 .selectable_label(sess.show_bot_manager, "Bot Editor")
@@ -554,55 +627,255 @@ impl eframe::App for HeadlessApp {
 
                             if ready {
                                 ui.add_space(6.0);
-                                ui.separator();
-                                ui.heading("Bot Controls");
-                                ui.horizontal(|ui| {
-                                    if ui.button("Load .gbot...").clicked()
-                                        && let Some(path) = rfd::FileDialog::new()
-                                            .add_filter("Grimoire Bot", &["gbot", "json"])
-                                            .pick_file()
-                                        && let Err(e) = sess.bot.load_gbot_file(&path)
-                                    {
-                                        sess.bot.logs.push_debug(format!("[Bot] Load error: {e}"));
-                                    }
+
+                                // 1. Bot Controls card
+                                grimlite_egui::theme::card(ui, "Bot Controls", |ui| {
                                     let bot_running = sess.bot.runner.is_running();
                                     let cfg = sess.bot.runner.config();
-                                    if !bot_running {
+                                    let has_cmds = !cfg.commands.is_empty();
+                                    let loaded = sess.bot.runner.loaded_name();
+
+                                    ui.horizontal(|ui| {
+                                        let script_label = if loaded.is_empty() {
+                                            "No .gbot loaded".to_string()
+                                        } else {
+                                            format!(
+                                                "{loaded} ({} cmds)",
+                                                cfg.commands.len()
+                                            )
+                                        };
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(script_label)
+                                                    .small()
+                                                    .color(if loaded.is_empty() {
+                                                        grimlite_egui::theme::Palette::TEXT_MUTED
+                                                    } else {
+                                                        grimlite_egui::theme::Palette::TEXT_PRIMARY
+                                                    }),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let (badge, col) = if bot_running {
+                                                    (
+                                                        format!(
+                                                            "Step #{}",
+                                                            sess.bot.runner.current_index()
+                                                        ),
+                                                        grimlite_egui::theme::Palette::SUCCESS,
+                                                    )
+                                                } else {
+                                                    (
+                                                        "IDLE".to_string(),
+                                                        grimlite_egui::theme::Palette::TEXT_MUTED,
+                                                    )
+                                                };
+                                                ui.label(
+                                                    RichText::new(badge).small().strong().color(col),
+                                                );
+                                            },
+                                        );
+                                    });
+
+                                    ui.add_space(4.0);
+                                    let half = ((ui.available_width() - 6.0) * 0.5).max(80.0);
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                        if grimlite_egui::theme::toggle_button(
+                                            ui,
+                                            bot_running,
+                                            bot_running || has_cmds,
+                                            "▶ Start Bot",
+                                            "⏹ Stop Bot",
+                                            Some([half, 24.0]),
+                                        )
+                                        .clicked()
+                                        {
+                                            if bot_running {
+                                                sess.bot.stop_bot();
+                                            } else {
+                                                sess.bot.start_bot();
+                                            }
+                                        }
+
                                         if ui
-                                            .add_enabled(
-                                                !cfg.commands.is_empty(),
-                                                egui::Button::new("▶ Start"),
+                                            .add_sized(
+                                                [half, 24.0],
+                                                egui::Button::new("Load .gbot…"),
                                             )
                                             .clicked()
+                                            && let Some(path) = rfd::FileDialog::new()
+                                                .add_filter("Grimoire Bot", &["gbot", "json"])
+                                                .pick_file()
+                                            && let Err(e) = sess.bot.load_gbot_file(&path)
                                         {
-                                            sess.bot.start_bot();
+                                            sess.bot
+                                                .logs
+                                                .push_debug(format!("[Bot] Load error: {e}"));
                                         }
-                                    } else if ui.button("⏹ Stop").clicked() {
-                                        sess.bot.stop_bot();
+                                    });
+
+                                    ui.add_space(3.0);
+                                    let full_w = ui.available_width().max(120.0);
+                                    let editor_clicked = if sess.show_bot_manager {
+                                        grimlite_egui::theme::primary_button(
+                                            ui,
+                                            "Bot Editor (Open)",
+                                            [full_w, 22.0],
+                                        )
+                                        .clicked()
+                                    } else {
+                                        ui.add_sized(
+                                            [full_w, 22.0],
+                                            egui::Button::new("Open Bot Editor"),
+                                        )
+                                        .clicked()
+                                    };
+                                    if editor_clicked {
+                                        sess.show_bot_manager = !sess.show_bot_manager;
                                     }
                                 });
 
-                                let loaded = sess.bot.runner.loaded_name();
-                                let cfg = sess.bot.runner.config();
-                                if !loaded.is_empty() {
-                                    ui.add_space(3.0);
-                                    ui.label(
-                                        RichText::new(format!(
-                                            "{loaded} — {} cmds | Step #{}",
-                                            cfg.commands.len(),
-                                            sess.bot.runner.current_index()
-                                        ))
-                                        .small(),
-                                    );
-                                }
+                                ui.add_space(6.0);
+
+                                // 2. Maid Controls card
+                                grimlite_egui::theme::card(ui, "Maid Controls", |ui| {
+                                    let maid_running = sess.bot.maid.is_running();
+                                    let maid_cfg = sess.bot.maid.config();
+                                    let target = maid_cfg.target.trim();
+
+                                    ui.horizontal(|ui| {
+                                        let target_label = if target.is_empty() {
+                                            "No follow target".to_string()
+                                        } else {
+                                            format!("Follow: {target}")
+                                        };
+                                        ui.add(
+                                            egui::Label::new(
+                                                RichText::new(target_label)
+                                                    .small()
+                                                    .color(if target.is_empty() {
+                                                        grimlite_egui::theme::Palette::TEXT_MUTED
+                                                    } else {
+                                                        grimlite_egui::theme::Palette::TEXT_PRIMARY
+                                                    }),
+                                            )
+                                            .truncate(),
+                                        );
+                                        ui.with_layout(
+                                            egui::Layout::right_to_left(egui::Align::Center),
+                                            |ui| {
+                                                let (badge, col) = if maid_running {
+                                                    (
+                                                        "RUNNING",
+                                                        grimlite_egui::theme::Palette::SUCCESS,
+                                                    )
+                                                } else {
+                                                    (
+                                                        "IDLE",
+                                                        grimlite_egui::theme::Palette::TEXT_MUTED,
+                                                    )
+                                                };
+                                                ui.label(
+                                                    RichText::new(badge).small().strong().color(col),
+                                                );
+                                            },
+                                        );
+                                    });
+
+                                    ui.add_space(4.0);
+                                    let half = ((ui.available_width() - 6.0) * 0.5).max(80.0);
+                                    ui.horizontal(|ui| {
+                                        ui.spacing_mut().item_spacing.x = 6.0;
+                                        if grimlite_egui::theme::toggle_button(
+                                            ui,
+                                            maid_running,
+                                            true,
+                                            "▶ Start Maid",
+                                            "⏹ Stop Maid",
+                                            Some([half, 24.0]),
+                                        )
+                                        .clicked()
+                                        {
+                                            sess.bot.maid.toggle(sess.bot.clone());
+                                        }
+
+                                        let maid_clicked = if sess.maid.open {
+                                            grimlite_egui::theme::primary_button(
+                                                ui,
+                                                "Maid (Open)",
+                                                [half, 24.0],
+                                            )
+                                            .clicked()
+                                        } else {
+                                            ui.add_sized(
+                                                [half, 24.0],
+                                                egui::Button::new("Open Maid"),
+                                            )
+                                            .clicked()
+                                        };
+                                        if maid_clicked {
+                                            sess.maid.open = !sess.maid.open;
+                                        }
+                                    });
+                                });
                             } else if running {
                                 ui.add_space(6.0);
-                                ui.separator();
-                                ui.label(
-                                    RichText::new("Waiting for login & player telemetry to load...")
+                                grimlite_egui::theme::card(ui, "Status", |ui| {
+                                    ui.label(
+                                        RichText::new(
+                                            "Waiting for login & player telemetry to load...",
+                                        )
+                                        .small()
                                         .weak()
                                         .italics(),
-                                );
+                                    );
+                                });
+                            } else {
+                                ui.add_space(6.0);
+                                grimlite_egui::theme::card(ui, "Disconnected", |ui| {
+                                    ui.label(
+                                        RichText::new(
+                                            "Account is stopped. Choose server and reconnect:",
+                                        )
+                                        .small()
+                                        .weak(),
+                                    );
+                                    ui.add_space(4.0);
+                                    let full_w = ui.available_width().max(120.0);
+                                    let selected_server = sess.server.clone();
+                                    grimlite_egui::theme::dropdown(
+                                        ui,
+                                        format!("reconnect_server_{id}"),
+                                        selected_server,
+                                        full_w,
+                                        |ui| {
+                                            for &srv in SERVERS {
+                                                ui.selectable_value(
+                                                    &mut sess.server,
+                                                    srv.to_string(),
+                                                    srv,
+                                                );
+                                            }
+                                        },
+                                    );
+                                    ui.add_space(4.0);
+                                    if grimlite_egui::theme::toggle_button(
+                                        ui,
+                                        true,
+                                        true,
+                                        "↻ Reconnect Account",
+                                        "↻ Reconnect Account",
+                                        Some([full_w, 26.0]),
+                                    )
+                                    .clicked()
+                                    {
+                                        sess.reconnect();
+                                    }
+                                });
                             }
                         });
 
@@ -640,6 +913,12 @@ impl eframe::App for HeadlessApp {
                                     };
                                     ui.label(RichText::new(hint).weak());
                                 } else {
+                                    let should_scroll_to_active = bot_running
+                                        && sess.last_active_cmd_idx != Some(active_idx);
+                                    if !bot_running {
+                                        sess.last_active_cmd_idx = None;
+                                    }
+
                                     ScrollArea::vertical()
                                         .id_salt(format!("cmd_list_{id}"))
                                         .auto_shrink([false, false])
@@ -655,7 +934,7 @@ impl eframe::App for HeadlessApp {
                                                 } else {
                                                     Color32::TRANSPARENT
                                                 };
-                                                egui::Frame::new()
+                                                let row_resp = egui::Frame::new()
                                                     .fill(bg)
                                                     .corner_radius(3.0)
                                                     .inner_margin(egui::Margin::symmetric(6, 2))
@@ -674,7 +953,12 @@ impl eframe::App for HeadlessApp {
                                                             RichText::new(text).monospace()
                                                         };
                                                         ui.label(rt);
-                                                    });
+                                                    })
+                                                    .response;
+                                                if is_cur && should_scroll_to_active {
+                                                    row_resp.scroll_to_me(Some(egui::Align::Center));
+                                                    sess.last_active_cmd_idx = Some(active_idx);
+                                                }
                                             }
                                         });
                                 }
@@ -698,8 +982,8 @@ impl eframe::App for HeadlessApp {
                                     }
                                 }
                                 if self.log_tab == LogTab::Packets {
-                                    ui.checkbox(&mut self.show_server_packets, "Server (IN)");
-                                    ui.checkbox(&mut self.show_client_packets, "Client (OUT)");
+                                    ui.checkbox(&mut self.show_server_packets, "Server");
+                                    ui.checkbox(&mut self.show_client_packets, "Client");
                                 }
                                 ui.checkbox(&mut self.auto_scroll, "Auto-scroll");
                                 ui.add(
@@ -1230,6 +1514,10 @@ impl eframe::App for HeadlessApp {
                 let mut open = sess.show_bot_manager;
                 sess.bot_manager.show(&ctx, &mut open);
                 sess.show_bot_manager = open;
+            }
+            if ready {
+                sess.maid.poll_quick_hotkeys(&ctx, &[]);
+                sess.maid.show(&ctx);
             }
         } else {
             egui::CentralPanel::default().show(ui, |ui| {

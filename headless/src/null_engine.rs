@@ -111,6 +111,7 @@ impl HeadlessEngine {
                     .expect("tokio runtime");
                 let _guard = rt.enter();
 
+                bot_engine.set_game_loaded(false);
                 bot_engine.state.reset_session();
                 bot_engine
                     .logs
@@ -243,6 +244,7 @@ impl HeadlessEngine {
                 }
 
                 bot_engine.stop_bot();
+                bot_engine.set_game_loaded(false);
                 bot_engine
                     .logs
                     .push_debug("[Headless] NullRenderer stopped");
