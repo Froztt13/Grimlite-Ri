@@ -96,6 +96,7 @@ pub struct GameState {
     pub quests: RwLock<HashMap<i32, QuestInfo>>,
     pub monsters: RwLock<Vec<RoomMonster>>,
     pub map_cells: RwLock<Vec<String>>,
+    pub available_pads: RwLock<HashSet<String>>,
     pub skills: RwLock<Vec<SkillSlot>>,
     pub haste: RwLock<f64>,
     pub last_skill_cast: RwLock<Option<std::time::Instant>>,
@@ -162,6 +163,10 @@ impl GameState {
         push_unique("Enter");
         push_unique("Blank");
         cells
+    }
+
+    pub fn available_pads_snapshot(&self) -> HashSet<String> {
+        self.available_pads.read().clone()
     }
 
     pub fn item_qty(&self, item_id: i32, name: &str, is_temp: bool) -> i32 {
@@ -253,6 +258,7 @@ impl GameState {
         self.quests.write().clear();
         self.monsters.write().clear();
         self.map_cells.write().clear();
+        self.available_pads.write().clear();
         self.skills.write().clear();
         *self.haste.write() = 0.0;
         *self.last_skill_cast.write() = None;

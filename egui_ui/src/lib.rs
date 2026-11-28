@@ -428,6 +428,8 @@ pub struct GrimliteUi {
     jump_cell: String,
     jump_pad: String,
     last_map_name: String,
+    last_cell_name: String,
+    last_pad_name: String,
 }
 
 impl GrimliteUi {
@@ -457,6 +459,8 @@ impl GrimliteUi {
             jump_cell: "Enter".to_string(),
             jump_pad: "Spawn".to_string(),
             last_map_name: String::new(),
+            last_cell_name: String::new(),
+            last_pad_name: String::new(),
         }
     }
 
@@ -629,9 +633,11 @@ impl GrimliteUi {
 
                         ui.spacing_mut().item_spacing.x = 6.0;
 
-                        // Sync cell list automatically whenever player joins a new map
+                        // Sync cell list & available pads automatically whenever player changes map, cell, or pad
                         if !snap.map.is_empty() && snap.map != self.last_map_name {
                             self.last_map_name = snap.map.clone();
+                            self.last_cell_name = snap.cell.clone();
+                            self.last_pad_name = snap.pad.clone();
                             if !snap.cell.is_empty() {
                                 self.jump_cell = snap.cell.clone();
                             }
@@ -639,6 +645,17 @@ impl GrimliteUi {
                                 self.jump_pad = snap.pad.clone();
                             }
                             self.bot.refresh_map_cells();
+                        } else if !snap.cell.is_empty() && snap.cell != self.last_cell_name {
+                            self.last_cell_name = snap.cell.clone();
+                            self.last_pad_name = snap.pad.clone();
+                            self.jump_cell = snap.cell.clone();
+                            if !snap.pad.is_empty() {
+                                self.jump_pad = snap.pad.clone();
+                            }
+                            self.bot.refresh_available_pads();
+                        } else if !snap.pad.is_empty() && snap.pad != self.last_pad_name {
+                            self.last_pad_name = snap.pad.clone();
+                            self.jump_pad = snap.pad.clone();
                         }
 
                         if ui.button("Bank").clicked() {
@@ -694,27 +711,44 @@ impl GrimliteUi {
                                 self.bot.refresh_map_cells();
                             }
                             if cell_changed {
-                                self.bot.spawn_flash_action(
-                                    "moveToCell",
-                                    vec![
-                                        FlashArg::from(self.jump_cell.as_str()),
-                                        FlashArg::from(self.jump_pad.as_str()),
-                                    ],
-                                );
+                                self.bot
+                                    .smart_jump_to_cell(&self.jump_cell, &self.jump_pad);
                             }
 
-                            // Pad dropdown
+                            // Pad dropdown (available/safe pads in current cell highlighted green)
+                            let avail_pads = self.bot.state.available_pads_snapshot();
                             let mut pad_changed = false;
-                            theme::dropdown(ui, "header_pad_cb", self.jump_pad.clone(), 74.0, |ui| {
-                                for &p in PADS {
-                                    if ui
-                                        .selectable_value(&mut self.jump_pad, p.to_string(), p)
-                                        .changed()
-                                    {
-                                        pad_changed = true;
+                            let pad_resp = theme::dropdown(
+                                ui,
+                                "header_pad_cb",
+                                self.jump_pad.clone(),
+                                74.0,
+                                |ui| {
+                                    for &p in PADS {
+                                        let is_safe = avail_pads.contains(&p.to_ascii_lowercase());
+                                        let label = if is_safe {
+                                            RichText::new(p)
+                                                .color(theme::Palette::SUCCESS)
+                                                .strong()
+                                        } else {
+                                            RichText::new(p)
+                                        };
+                                        if ui
+                                            .selectable_value(
+                                                &mut self.jump_pad,
+                                                p.to_string(),
+                                                label,
+                                            )
+                                            .changed()
+                                        {
+                                            pad_changed = true;
+                                        }
                                     }
-                                }
-                            });
+                                },
+                            );
+                            if pad_resp.response.clicked() {
+                                self.bot.refresh_available_pads();
+                            }
                             if pad_changed {
                                 let target_cell = if self.jump_cell.is_empty() {
                                     snap.cell.as_str()

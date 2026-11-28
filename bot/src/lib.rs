@@ -48,6 +48,7 @@ pub struct Bot {
     pub special_handler: Arc<SpecialHandlerManager>,
     game_loaded: AtomicBool,
     worker_started: AtomicBool,
+    jump_gen: std::sync::atomic::AtomicU64,
 }
 
 impl Bot {
@@ -85,6 +86,7 @@ impl Bot {
             special_handler: special_handler.clone(),
             game_loaded: AtomicBool::new(false),
             worker_started: AtomicBool::new(false),
+            jump_gen: std::sync::atomic::AtomicU64::new(0),
         });
 
         let weak_bot = Arc::downgrade(&bot);
@@ -130,6 +132,89 @@ impl Bot {
                     && !parsed.is_empty()
                 {
                     *bot.state.map_cells.write() = parsed;
+                }
+            });
+        self.refresh_available_pads();
+    }
+
+    /// Queries which standard pads (`Center`, `Spawn`, `Left`, `Right`, `Top`, `Bottom`, `Up`, `Down`)
+    /// exist as children on `world.map` in the current cell (mirrors `MapCommands.as::getAvailablePads`).
+    pub fn refresh_available_pads(self: &Arc<Self>) {
+        let bot = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name("grimlite-pads".into())
+            .spawn(move || {
+                let Some(flash) = bot.flash() else {
+                    return;
+                };
+                let found = query_available_pads(&flash);
+                *bot.state.available_pads.write() = found;
+            });
+    }
+
+    /// Jumps to `cell` using `pad`, then verifies whether `pad` is available/safe in the target cell.
+    /// If not, automatically re-jumps to the highest-priority safe pad (mirrors `MapCommands.as::smartJump`).
+    pub fn smart_jump_to_cell(self: &Arc<Self>, cell: &str, pad: &str) {
+        let target_cell = cell.trim().to_string();
+        if target_cell.is_empty() {
+            return;
+        }
+        let initial_pad = if pad.trim().is_empty() || pad.trim() == "*" {
+            "Spawn".to_string()
+        } else {
+            pad.trim().to_string()
+        };
+
+        let jump_id = self.jump_gen.fetch_add(1, Ordering::AcqRel) + 1;
+        let bot = Arc::clone(self);
+        let _ = std::thread::Builder::new()
+            .name("grimlite-smart-jump".into())
+            .spawn(move || {
+                let Some(flash) = bot.flash() else {
+                    return;
+                };
+
+                // 1. Perform initial jump
+                let _ = flash.call_str(
+                    "moveToCell",
+                    &[
+                        FlashArg::from(target_cell.as_str()),
+                        FlashArg::from(initial_pad.as_str()),
+                    ],
+                );
+
+                // 2. Poll up to 10 x 150ms for cell arrival and available pads (MapCommands.as::onPadCorrectionTick)
+                for _ in 0..10 {
+                    std::thread::sleep(Duration::from_millis(150));
+                    if bot.jump_gen.load(Ordering::Acquire) != jump_id {
+                        return;
+                    }
+                    let snap = bot.state.snapshot();
+                    if !snap.cell.is_empty() && !snap.cell.eq_ignore_ascii_case(&target_cell) {
+                        continue;
+                    }
+                    let avail = query_available_pads(&flash);
+                    if avail.is_empty() {
+                        continue;
+                    }
+                    *bot.state.available_pads.write() = avail.clone();
+
+                    let cur_pad = if snap.pad.is_empty() {
+                        initial_pad.as_str()
+                    } else {
+                        snap.pad.as_str()
+                    };
+                    if !avail.contains(&cur_pad.to_ascii_lowercase()) {
+                        let safe_pad = choose_fallback_pad(&avail);
+                        let _ = flash.call_str(
+                            "moveToCell",
+                            &[
+                                FlashArg::from(target_cell.as_str()),
+                                FlashArg::from(safe_pad),
+                            ],
+                        );
+                    }
+                    return;
                 }
             });
     }
@@ -445,4 +530,66 @@ fn encode_base64(input: &[u8]) -> String {
         }
     }
     out
+}
+
+fn query_available_pads(flash: &Flash) -> std::collections::HashSet<String> {
+    const STANDARD_PADS: &[&str] = &[
+        "Center", "Spawn", "Left", "Right", "Top", "Bottom", "Up", "Down",
+    ];
+    let mut found = std::collections::HashSet::new();
+    for &pad in STANDARD_PADS {
+        let path = format!("world.map.{pad}");
+        let exists = flash
+            .call_str("isNull", &[FlashArg::from(path.as_str())])
+            .map(|r| r.trim().eq_ignore_ascii_case("false"))
+            .unwrap_or(false);
+        if exists {
+            found.insert(pad.to_ascii_lowercase());
+            continue;
+        }
+        let lower = pad.to_ascii_lowercase();
+        let lower_path = format!("world.map.{lower}");
+        if flash
+            .call_str("isNull", &[FlashArg::from(lower_path.as_str())])
+            .map(|r| r.trim().eq_ignore_ascii_case("false"))
+            .unwrap_or(false)
+        {
+            found.insert(lower);
+        }
+    }
+    found
+}
+
+/// Priority-ordered safe pad fallback (mirrors `MapCommands.as::chooseFallbackPad`).
+pub fn choose_fallback_pad(available: &std::collections::HashSet<String>) -> &'static str {
+    const PRIORITY: &[&str] = &[
+        "Spawn", "Center", "Left", "Right", "Top", "Bottom", "Up", "Down",
+    ];
+    for &pref in PRIORITY {
+        if available.contains(&pref.to_ascii_lowercase()) {
+            return pref;
+        }
+    }
+    "Spawn"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choose_fallback_pad_follows_map_commands_priority() {
+        let mut pads = std::collections::HashSet::new();
+        assert_eq!(choose_fallback_pad(&pads), "Spawn");
+
+        pads.insert("right".into());
+        pads.insert("left".into());
+        assert_eq!(choose_fallback_pad(&pads), "Left");
+
+        pads.insert("center".into());
+        assert_eq!(choose_fallback_pad(&pads), "Center");
+
+        pads.insert("spawn".into());
+        assert_eq!(choose_fallback_pad(&pads), "Spawn");
+    }
 }
