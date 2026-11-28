@@ -185,6 +185,10 @@ impl BotRunner {
         *self.config.write() = config;
     }
 
+    pub fn set_quests(&self, quests: Vec<crate::gbot::QuestEntry>) {
+        self.config.write().quests = quests;
+    }
+
     pub fn config(&self) -> BotConfig {
         self.config.read().clone()
     }
@@ -225,6 +229,101 @@ impl BotRunner {
         let paused = self.paused.clone();
         let index = self.index.clone();
         let mut config = self.config.read().clone();
+
+        // Spawn dedicated background Auto Quest List thread (mirrors Grimlite-Li `StartQuestList`).
+        // Keeps accepting/completing quests in `config.quests` concurrently even while the main
+        // runner thread is blocked inside long commands such as `Kill for items`.
+        {
+            let q_bot = Arc::clone(&bot);
+            let q_running = running.clone();
+            let q_paused = paused.clone();
+            let _ = std::thread::Builder::new()
+                .name("grimlite-quest-list".into())
+                .spawn(move || {
+                    while q_running.load(Ordering::Acquire) {
+                        if q_paused.load(Ordering::Acquire) || !q_bot.is_logged_in() {
+                            sleep_interruptible(300, &q_running);
+                            continue;
+                        }
+                        let (quests, exit_combat, bot_delay) = {
+                            let cfg = q_bot.runner.config.read();
+                            (
+                                cfg.quests.clone(),
+                                cfg.exit_combat_before_quest,
+                                cfg.bot_delay,
+                            )
+                        };
+                        if quests.is_empty() {
+                            sleep_interruptible(800, &q_running);
+                            continue;
+                        }
+                        let Some(flash) = q_bot.flash() else {
+                            sleep_interruptible(400, &q_running);
+                            continue;
+                        };
+
+                        for q in &quests {
+                            if !q_running.load(Ordering::Acquire)
+                                || q_paused.load(Ordering::Acquire)
+                                || !q_bot.is_logged_in()
+                            {
+                                break;
+                            }
+                            if !flash
+                                .call_bool("isQuestInProgress", &[crate::host::FlashArg::from(q.id)])
+                                .unwrap_or(false)
+                            {
+                                crate::commands::quest::accept_quest_direct(
+                                    &q_bot, &flash, &q_running, q.id,
+                                );
+                            } else if flash
+                                .call_bool("canCompleteQuest", &[crate::host::FlashArg::from(q.id)])
+                                .unwrap_or(false)
+                            {
+                                let item_id = q
+                                    .item_id
+                                    .as_deref()
+                                    .and_then(|s| s.trim().parse::<i32>().ok())
+                                    .unwrap_or(-1);
+                                crate::commands::quest::complete_quest_direct(
+                                    &q_bot,
+                                    &flash,
+                                    &q_running,
+                                    q.id,
+                                    item_id,
+                                    1,
+                                    exit_combat,
+                                    bot_delay,
+                                );
+                                crate::commands::quest::accept_quest_direct(
+                                    &q_bot, &flash, &q_running, q.id,
+                                );
+                            }
+                        }
+
+                        sleep_interruptible(1000, &q_running);
+                    }
+                });
+        }
+
+        // Spawn dedicated background Auto Pickup / Reject Drops thread so drops are collected
+        // immediately even while the main runner is mid-fight inside `Kill for items` or `Delay`.
+        {
+            let d_bot = Arc::clone(&bot);
+            let d_running = running.clone();
+            let d_paused = paused.clone();
+            let _ = std::thread::Builder::new()
+                .name("grimlite-drops".into())
+                .spawn(move || {
+                    while d_running.load(Ordering::Acquire) {
+                        if !d_paused.load(Ordering::Acquire) && d_bot.is_logged_in() {
+                            let cfg = d_bot.runner.config.read().clone();
+                            handle_drops(&d_bot, &cfg);
+                        }
+                        sleep_interruptible(400, &d_running);
+                    }
+                });
+        }
 
         let _ = std::thread::Builder::new()
             .name("grimlite-runner".into())

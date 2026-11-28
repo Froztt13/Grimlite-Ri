@@ -1,8 +1,12 @@
 //! Quest commands: AcceptQuest, CompleteQuest (aligned with Grimlite-Li `CmdAcceptQuest` / `CmdCompleteQuest`).
 
 use super::CommandContext;
+use crate::Bot;
+use crate::flash::Flash;
 use crate::gbot::{BotCommand, QuestEntry};
 use crate::host::FlashArg;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
 pub fn execute(ctx: &mut CommandContext<'_>, cmd: &BotCommand) -> usize {
     match cmd {
@@ -18,21 +22,20 @@ pub fn execute(ctx: &mut CommandContext<'_>, cmd: &BotCommand) -> usize {
         }
         BotCommand::AddQuestList { quest_id, item_id } => {
             if *quest_id > 0 {
-                let _ = ctx
-                    .bot
-                    .capture
-                    .send_to_server(&format!("%xt%zm%acceptQuest%1%{quest_id}%"));
                 if !ctx.config.quests.iter().any(|q| q.id == *quest_id) {
                     ctx.config.quests.push(QuestEntry {
                         id: *quest_id,
                         item_id: (*item_id > 0).then(|| item_id.to_string()),
                         safe_relogin: false,
                     });
+                    ctx.bot.runner.set_quests(ctx.config.quests.clone());
                 }
+                accept_quest(ctx, *quest_id);
             }
         }
         BotCommand::RemoveQuestList { quest_id } => {
             ctx.config.quests.retain(|q| q.id != *quest_id);
+            ctx.bot.runner.set_quests(ctx.config.quests.clone());
         }
         _ => {}
     }
@@ -43,67 +46,69 @@ pub fn execute(ctx: &mut CommandContext<'_>, cmd: &BotCommand) -> usize {
 /// 1. Skip immediately if already in progress.
 /// 2. Load quest only if not yet loaded in `questTree`, waiting up to 3s.
 /// 3. Skip non-repeatable quests whose progression requirement is already satisfied.
-/// 4. Retry `acceptQuest` up to 2 times (600ms interval) only while `!isQuestInProgress`.
+/// 4. Retry `acceptQuest` up to 4 times only while `!isQuestInProgress`.
 pub fn accept_quest(ctx: &CommandContext<'_>, quest_id: i32) {
-    if quest_id <= 0 {
+    accept_quest_direct(ctx.bot, ctx.flash, ctx.running, quest_id);
+}
+
+pub fn accept_quest_direct(bot: &Bot, flash: &Flash, running: &AtomicBool, quest_id: i32) {
+    if quest_id <= 0 || !running.load(Ordering::Acquire) {
         return;
     }
 
-    if ctx
-        .flash
+    if flash
         .call_bool("isQuestInProgress", &[FlashArg::from(quest_id)])
         .unwrap_or(false)
     {
         return;
     }
 
-    let loaded = ctx
-        .flash
+    let loaded = flash
         .call_bool("isQuestLoaded", &[FlashArg::from(quest_id)])
         .unwrap_or(false);
     if !loaded {
-        let _ = ctx
-            .flash
-            .call_bool("loadQuest", &[FlashArg::from(quest_id)]);
-        let ok = ctx.wait_until(3000, 150, || {
-            ctx.flash
+        let _ = flash.call_bool("loadQuest", &[FlashArg::from(quest_id)]);
+        let ok = wait_until(running, 3000, 150, || {
+            flash
                 .call_bool("isQuestLoaded", &[FlashArg::from(quest_id)])
                 .unwrap_or(false)
         });
         if !ok {
-            ctx.bot.logs.push_debug(format!(
+            bot.logs.push_debug(format!(
                 "[Quest] Failed to accept {quest_id}: quest not loaded"
             ));
             return;
         }
     }
 
-    if ctx
-        .flash
+    if flash
         .call_bool("isQuestCompletedOnce", &[FlashArg::from(quest_id)])
         .unwrap_or(false)
     {
-        ctx.bot.logs.push_debug(format!(
+        bot.logs.push_debug(format!(
             "[Quest] Skipping non-repeatable quest {quest_id} (already completed)"
         ));
         return;
     }
 
-    for _ in 0..2 {
-        if !ctx.is_running() {
+    for _ in 0..4 {
+        if !running.load(Ordering::Acquire) {
             break;
         }
-        if ctx
-            .flash
+        if flash
             .call_bool("isQuestInProgress", &[FlashArg::from(quest_id)])
             .unwrap_or(false)
         {
             break;
         }
-        let _ = ctx
-            .flash
-            .call_bool("acceptQuest", &[FlashArg::from(quest_id)]);
-        ctx.sleep(600);
+        let _ = flash.call_bool("acceptQuest", &[FlashArg::from(quest_id)]);
+        if wait_until(running, 700, 140, || {
+            flash
+                .call_bool("isQuestInProgress", &[FlashArg::from(quest_id)])
+                .unwrap_or(false)
+        }) {
+            break;
+        }
     }
 }
 
@@ -112,27 +117,67 @@ pub fn accept_quest(ctx: &CommandContext<'_>, quest_id: i32) {
 /// 2. Optionally exit combat if `config.exit_combat_before_quest` is enabled.
 /// 3. Call `completeQuest` and respect the 1100ms server cooldown minus `bot_delay`.
 pub fn complete_quest(ctx: &CommandContext<'_>, quest_id: i32, item_id: i32, qty: i32) {
-    if quest_id <= 0 {
+    complete_quest_direct(
+        ctx.bot,
+        ctx.flash,
+        ctx.running,
+        quest_id,
+        item_id,
+        qty,
+        ctx.config.exit_combat_before_quest,
+        ctx.config.bot_delay,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn complete_quest_direct(
+    bot: &Bot,
+    flash: &Flash,
+    running: &AtomicBool,
+    quest_id: i32,
+    item_id: i32,
+    qty: i32,
+    exit_combat_before_quest: bool,
+    bot_delay: u64,
+) {
+    if quest_id <= 0 || !running.load(Ordering::Acquire) {
         return;
     }
 
-    if !ctx
-        .flash
+    if !flash
         .call_bool("canCompleteQuest", &[FlashArg::from(quest_id)])
         .unwrap_or(false)
     {
         return;
     }
 
-    let prev_provoke = ctx.bot.options.get().provoke_monsters;
+    if exit_combat_before_quest {
+        let _ = flash.call_str("CancelAutoAttack", &[]);
+        let _ = flash.call_str("CancelTarget", &[]);
+        let snap = bot.player_snapshot();
+        if !snap.cell.is_empty() {
+            let pad = if snap.pad.is_empty() {
+                "Left"
+            } else {
+                snap.pad.as_str()
+            };
+            let _ = flash.call_str(
+                "moveToCell",
+                &[FlashArg::from(snap.cell.as_str()), FlashArg::from(pad)],
+            );
+            sleep_interruptible(running, 250);
+        }
+    }
+
+    let prev_provoke = bot.options.get().provoke_monsters;
     if prev_provoke {
-        let mut opts = ctx.bot.options.get();
+        let mut opts = bot.options.get();
         opts.provoke_monsters = false;
-        ctx.bot.apply_options(opts);
+        bot.apply_options(opts);
     }
 
     let turn_ins = if qty == 0 { 1 } else { qty };
-    let _ = ctx.flash.call_bool(
+    let _ = flash.call_bool(
         "completeQuest",
         &[
             FlashArg::from(quest_id),
@@ -142,13 +187,41 @@ pub fn complete_quest(ctx: &CommandContext<'_>, quest_id: i32, item_id: i32, qty
     );
 
     if prev_provoke {
-        let mut opts = ctx.bot.options.get();
+        let mut opts = bot.options.get();
         opts.provoke_monsters = true;
-        ctx.bot.apply_options(opts);
+        bot.apply_options(opts);
     }
 
-    let delay = 1100u64.saturating_sub(ctx.config.bot_delay);
+    let delay = 1100u64.saturating_sub(bot_delay);
     if delay > 0 {
-        ctx.sleep(delay);
+        sleep_interruptible(running, delay);
     }
+}
+
+fn sleep_interruptible(running: &AtomicBool, ms: u64) {
+    let mut slept = 0u64;
+    while slept < ms && running.load(Ordering::Acquire) {
+        let step = (ms - slept).min(50);
+        std::thread::sleep(Duration::from_millis(step));
+        slept += step;
+    }
+}
+
+fn wait_until(
+    running: &AtomicBool,
+    timeout_ms: u64,
+    poll_ms: u64,
+    mut pred: impl FnMut() -> bool,
+) -> bool {
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms);
+    while running.load(Ordering::Acquire) {
+        if pred() {
+            return true;
+        }
+        if Instant::now() >= deadline {
+            return false;
+        }
+        sleep_interruptible(running, poll_ms);
+    }
+    false
 }
