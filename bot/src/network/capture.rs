@@ -65,8 +65,8 @@ impl InterceptedPacket {
 
     pub fn direction(&self) -> &'static str {
         match self.outbound {
-            Some(true) => "OUT",
-            Some(false) => "IN",
+            Some(true) => "CLIENT",
+            Some(false) => "SERVER",
             None => "BLOCK",
         }
     }
@@ -74,7 +74,8 @@ impl InterceptedPacket {
 
 pub struct CaptureProxy {
     running: AtomicBool,
-    logging: AtomicBool,
+    log_client: AtomicBool,
+    log_server: AtomicBool,
     interceptors: RwLock<Vec<Arc<dyn Interceptor>>>,
     sink: RwLock<Option<Arc<dyn PacketSink>>>,
     log: Mutex<VecDeque<InterceptedPacket>>,
@@ -86,7 +87,8 @@ impl Default for CaptureProxy {
     fn default() -> Self {
         Self {
             running: AtomicBool::new(false),
-            logging: AtomicBool::new(false),
+            log_client: AtomicBool::new(false),
+            log_server: AtomicBool::new(false),
             interceptors: RwLock::new(Vec::new()),
             sink: RwLock::new(None),
             log: Mutex::new(VecDeque::new()),
@@ -111,12 +113,29 @@ impl CaptureProxy {
         self.version.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn is_logging_client(&self) -> bool {
+        self.log_client.load(Ordering::Relaxed)
+    }
+
+    pub fn set_logging_client(&self, on: bool) {
+        self.log_client.store(on, Ordering::Relaxed);
+    }
+
+    pub fn is_logging_server(&self) -> bool {
+        self.log_server.load(Ordering::Relaxed)
+    }
+
+    pub fn set_logging_server(&self, on: bool) {
+        self.log_server.store(on, Ordering::Relaxed);
+    }
+
     pub fn is_logging(&self) -> bool {
-        self.logging.load(Ordering::Relaxed)
+        self.is_logging_client() || self.is_logging_server()
     }
 
     pub fn set_logging(&self, on: bool) {
-        self.logging.store(on, Ordering::Relaxed);
+        self.set_logging_client(on);
+        self.set_logging_server(on);
     }
 
     pub fn set_sink(&self, sink: Arc<dyn PacketSink>) {
@@ -147,7 +166,7 @@ impl CaptureProxy {
             bytes.push(0);
         }
         sink.send_to_server(bytes)?;
-        if self.is_logging() {
+        if self.is_logging_client() {
             self.log_packet(InterceptedPacket::new(trimmed.to_string(), Some(true)));
         }
         Ok(())
@@ -169,7 +188,7 @@ impl CaptureProxy {
             bytes.push(0);
         }
         sink.send_to_client(bytes)?;
-        if self.is_logging() {
+        if self.is_logging_server() {
             self.log_packet(InterceptedPacket::new(trimmed.to_string(), Some(false)));
         }
         Ok(())
@@ -207,9 +226,13 @@ impl CaptureProxy {
         if !self.is_running() {
             return Some(Cow::Borrowed(data));
         }
-        let logging = self.is_logging();
+        let should_log = if outbound {
+            self.is_logging_client()
+        } else {
+            self.is_logging_server()
+        };
         let interceptors = self.interceptors.read().clone();
-        if interceptors.is_empty() && !logging {
+        if interceptors.is_empty() && !should_log {
             return Some(Cow::Borrowed(data));
         }
 
@@ -223,7 +246,7 @@ impl CaptureProxy {
             interceptor.intercept(&mut message, outbound);
         }
 
-        if logging {
+        if should_log {
             self.log_packet(InterceptedPacket::new(
                 message.content.clone(),
                 message.send.then_some(outbound),
@@ -355,8 +378,18 @@ mod tests {
         assert_eq!(out, b"%xt%zm%hi%1%\0");
         let (_, logged) = proxy.snapshot();
         assert_eq!(logged.len(), 2);
-        assert_eq!(logged[0].direction(), "OUT");
+        assert_eq!(logged[0].direction(), "CLIENT");
         assert_eq!(logged[1].direction(), "BLOCK");
+
+        // Independent client/server logging filter
+        proxy.clear();
+        proxy.set_logging_client(false);
+        proxy.set_logging_server(true);
+        let _ = stream.filter(&proxy, b"%xt%zm%hi%1%\0".to_vec(), true);
+        let _ = stream.filter(&proxy, b"%xt%hi%1%\0".to_vec(), false);
+        let (_, logged2) = proxy.snapshot();
+        assert_eq!(logged2.len(), 1);
+        assert_eq!(logged2[0].direction(), "SERVER");
     }
 
     #[test]
