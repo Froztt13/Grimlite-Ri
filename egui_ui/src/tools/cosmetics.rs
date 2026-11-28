@@ -6,16 +6,27 @@ use crate::theme;
 use egui::{Context, RichText, TextEdit, Ui};
 use grimlite_bot::Bot;
 use grimlite_bot::host::FlashArg;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
+
+#[derive(Default)]
+struct SyncedCosmetics {
+    is_unmuted: Option<bool>,
+    is_female: Option<bool>,
+}
 
 pub struct CosmeticsWindow {
     bot: Arc<Bot>,
     pub open: bool,
-    mute_toggled: bool,
+    was_open: bool,
+    last_synced_user: String,
+    is_unmuted: bool,
+    is_female: bool,
+    mute_touched: bool,
+    gender_touched: bool,
+    pending_sync: Arc<Mutex<Option<SyncedCosmetics>>>,
     username: String,
     guild: String,
     level: String,
-    gender_swapped: bool,
 }
 
 impl CosmeticsWindow {
@@ -23,25 +34,90 @@ impl CosmeticsWindow {
         Self {
             bot,
             open: false,
-            mute_toggled: false,
+            was_open: false,
+            last_synced_user: String::new(),
+            is_unmuted: true,
+            is_female: false,
+            mute_touched: false,
+            gender_touched: false,
+            pending_sync: Arc::new(Mutex::new(None)),
             username: String::new(),
             guild: String::new(),
             level: String::new(),
-            gender_swapped: false,
         }
+    }
+
+    fn trigger_sync(&mut self) {
+        let bot = Arc::clone(&self.bot);
+        let slot = Arc::clone(&self.pending_sync);
+        let _ = std::thread::Builder::new()
+            .name("grimlite-cosmetics-sync".into())
+            .spawn(move || {
+                let Some(flash) = bot.flash() else {
+                    return;
+                };
+                let is_unmuted = flash
+                    .call_str("getGameObject", &[FlashArg::from("chatF.iChat")])
+                    .ok()
+                    .and_then(|raw| parse_ichat_unmuted(&raw));
+                let is_female = flash
+                    .call_str(
+                        "getGameObject",
+                        &[FlashArg::from("world.myAvatar.objData.strGender")],
+                    )
+                    .ok()
+                    .and_then(|raw| parse_gender_female(&raw));
+                if let Ok(mut guard) = slot.lock() {
+                    *guard = Some(SyncedCosmetics {
+                        is_unmuted,
+                        is_female,
+                    });
+                }
+            });
     }
 
     pub fn show(&mut self, ctx: &Context) {
         if !self.open {
+            self.was_open = false;
             return;
         }
+
+        // Sync initial Mute/Unmute and Male/Female state from Flash whenever the window opens
+        // or the logged-in player changes.
+        let snap = self.bot.player_snapshot();
+        let just_opened = !self.was_open;
+        self.was_open = true;
+        if snap.logged_in && (just_opened || snap.username != self.last_synced_user) {
+            self.last_synced_user = snap.username.clone();
+            self.mute_touched = false;
+            self.gender_touched = false;
+            self.trigger_sync();
+        } else if !snap.logged_in {
+            self.last_synced_user.clear();
+        }
+
+        if let Ok(mut guard) = self.pending_sync.lock()
+            && let Some(synced) = guard.take()
+        {
+            if let Some(unmuted) = synced.is_unmuted
+                && !self.mute_touched
+            {
+                self.is_unmuted = unmuted;
+            }
+            if let Some(female) = synced.is_female
+                && !self.gender_touched
+            {
+                self.is_female = female;
+            }
+        }
+
         let mut open = self.open;
         show_detached_window_sized(
             ctx,
             "grimlite_cosmetics",
             "Cosmetics",
-            [285.0, 245.0],
-            Some([265.0, 230.0]),
+            [285.0, 248.0],
+            Some([265.0, 232.0]),
             &mut open,
             |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(5.0, 4.0);
@@ -188,22 +264,30 @@ impl CosmeticsWindow {
 
         ui.add_space(4.0);
 
-        // Bottom toggles row
+        // Bottom segmented switches: Mute / Unmute and Male / Female
         ui.horizontal(|ui| {
-            if ui.checkbox(&mut self.mute_toggled, "Toggle Mute").changed() {
-                let chat_val = if self.mute_toggled { 0 } else { 2 };
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let half = ((ui.available_width() - 6.0) * 0.5).max(108.0);
+
+            let prev_unmuted = self.is_unmuted;
+            theme::segmented_switch(ui, &mut self.is_unmuted, "Mute", "Unmute", half)
+                .on_hover_text("Toggle client-side chat mute (chatF.iChat)");
+            if self.is_unmuted != prev_unmuted {
+                self.mute_touched = true;
+                let chat_val = if self.is_unmuted { 2 } else { 0 };
                 self.bot.spawn_flash_action(
                     "setGameObject",
                     vec![FlashArg::from("chatF.iChat"), FlashArg::from(chat_val)],
                 );
             }
-            ui.add_space(8.0);
-            if ui
-                .checkbox(&mut self.gender_swapped, "Gender swap")
-                .changed()
-            {
+
+            let prev_female = self.is_female;
+            theme::segmented_switch(ui, &mut self.is_female, "Male", "Female", half)
+                .on_hover_text("Client-side gender swap");
+            if self.is_female != prev_female {
+                self.gender_touched = true;
                 let uid = *self.bot.state.user_id.read();
-                let gender = if self.gender_swapped { "F" } else { "M" };
+                let gender = if self.is_female { "F" } else { "M" };
                 let pkt = format!(
                     r#"{{"t":"xt","b":{{"r":-1,"o":{{"cmd":"genderSwap","bitSuccess":1,"gender":"{gender}","intCoins":0,"uid":"{uid}","strHairFileName":"","HairID":"","strHairName":""}}}}}}"#
                 );
@@ -283,5 +367,41 @@ impl CosmeticsWindow {
             }
             _ => {}
         }
+    }
+}
+
+fn parse_ichat_unmuted(raw: &str) -> Option<bool> {
+    let cleaned = raw.trim().trim_matches('"').trim();
+    cleaned.parse::<i32>().ok().map(|v| v > 0)
+}
+
+fn parse_gender_female(raw: &str) -> Option<bool> {
+    let cleaned = raw.trim().trim_matches('"').trim();
+    if cleaned.eq_ignore_ascii_case("F") {
+        Some(true)
+    } else if cleaned.eq_ignore_ascii_case("M") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_flash_chat_mute_and_gender_values() {
+        assert_eq!(parse_ichat_unmuted("0"), Some(false));
+        assert_eq!(parse_ichat_unmuted("\"0\""), Some(false));
+        assert_eq!(parse_ichat_unmuted("2"), Some(true));
+        assert_eq!(parse_ichat_unmuted("1"), Some(true));
+        assert_eq!(parse_ichat_unmuted("null"), None);
+
+        assert_eq!(parse_gender_female("M"), Some(false));
+        assert_eq!(parse_gender_female("\"M\""), Some(false));
+        assert_eq!(parse_gender_female("F"), Some(true));
+        assert_eq!(parse_gender_female("\"f\""), Some(true));
+        assert_eq!(parse_gender_female(""), None);
     }
 }
